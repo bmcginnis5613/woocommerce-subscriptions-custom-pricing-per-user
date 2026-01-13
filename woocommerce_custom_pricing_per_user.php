@@ -3,8 +3,8 @@
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
  * Version: 1.0.0
- * Author: Your Name
- * Author URI: https://example.com
+ * Author: FirstTracks Marketing
+ * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
  */
 
