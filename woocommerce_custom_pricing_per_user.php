@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -76,6 +76,9 @@ class WC_Custom_Renewal_Pricing {
         
         // Apply custom pricing to initial purchase
         add_action('woocommerce_before_calculate_totals', array($this, 'apply_custom_price_to_cart'), 10, 1);
+        add_filter('woocommerce_cart_item_price', array($this, 'display_custom_cart_price'), 10, 3);
+        add_filter('woocommerce_cart_item_subtotal', array($this, 'display_custom_cart_price'), 10, 3);
+        add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
         add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
         
         // Apply custom pricing to renewals
@@ -88,6 +91,9 @@ class WC_Custom_Renewal_Pricing {
         // User list columns
         add_filter('manage_users_columns', array($this, 'add_custom_price_column'));
         add_action('manage_users_custom_column', array($this, 'show_custom_price_column'), 10, 3);
+        
+        // Force cart fragments refresh
+        add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
     }
     
     /**
@@ -360,6 +366,55 @@ class WC_Custom_Renewal_Pricing {
                 }
             }
         }
+    }
+    
+    /**
+     * Display custom price in cart and mini-cart
+     */
+    public function display_custom_cart_price($price, $cart_item, $cart_item_key) {
+        if (!is_user_logged_in()) {
+            return $price;
+        }
+        
+        $user_id = get_current_user_id();
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
+        
+        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+            // Only apply to subscription products
+            if (class_exists('WC_Subscriptions_Product') && WC_Subscriptions_Product::is_subscription($cart_item['product_id'])) {
+                return wc_price($custom_price);
+            }
+        }
+        
+        return $price;
+    }
+    
+    /**
+     * Custom price HTML for products in cart
+     */
+    public function custom_price_html($price, $product) {
+        if (!is_user_logged_in() || !is_cart() && !wp_doing_ajax()) {
+            return $price;
+        }
+        
+        $user_id = get_current_user_id();
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
+        
+        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+            if (class_exists('WC_Subscriptions_Product') && WC_Subscriptions_Product::is_subscription($product->get_id())) {
+                return wc_price($custom_price);
+            }
+        }
+        
+        return $price;
+    }
+    
+    /**
+     * Force refresh cart fragments to update mini-cart
+     */
+    public function refresh_cart_fragments($fragments) {
+        // This ensures the mini-cart refreshes with updated prices
+        return $fragments;
     }
 
     /**
