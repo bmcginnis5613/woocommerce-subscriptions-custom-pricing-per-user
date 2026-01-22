@@ -95,7 +95,7 @@ class WC_Custom_Renewal_Pricing {
         // Force cart fragments refresh
         add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
     }
-    
+
     /**
      * Add custom price field to user profile
      */
@@ -225,20 +225,6 @@ class WC_Custom_Renewal_Pricing {
                 </td>
             </tr>
             <tr>
-                <th><label for="quarterly_membership_dues"><?php _e('Quarterly Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
-                <td>
-                    <input type="text" 
-                           id="quarterly_membership_dues" 
-                           value="<?php echo esc_attr($quarterly_price); ?>" 
-                           class="regular-text" 
-                           readonly 
-                           style="background-color: #f0f0f1; cursor: not-allowed;" />
-                    <p class="description">
-                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest 10.', 'wc-custom-renewal-pricing'); ?>
-                    </p>
-                </td>
-            </tr>
-            <tr>
                 <th><label for="bi_annual_membership_dues"><?php _e('Bi-Annual Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
                 <td>
                     <input type="text" 
@@ -252,9 +238,23 @@ class WC_Custom_Renewal_Pricing {
                     </p>
                 </td>
             </tr>
+            <tr>
+                <th><label for="quarterly_membership_dues"><?php _e('Quarterly Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
+                <td>
+                    <input type="text" 
+                           id="quarterly_membership_dues" 
+                           value="<?php echo esc_attr($quarterly_price); ?>" 
+                           class="regular-text" 
+                           readonly 
+                           style="background-color: #f0f0f1; cursor: not-allowed;" />
+                    <p class="description">
+                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest 10.', 'wc-custom-renewal-pricing'); ?>
+                    </p>
+                </td>
+            </tr>
         </table>
         <?php
-    }
+    }    
     
     /**
      * Save custom price field
@@ -461,8 +461,8 @@ class WC_Custom_Renewal_Pricing {
      */
     public function add_custom_price_column($columns) {
         $columns['annual_membership_dues'] = __('Annual Membership Dues', 'wc-custom-renewal-pricing');
-        $columns['quarterly_membership_dues'] = __('Quarterly Dues', 'wc-custom-renewal-pricing');
         $columns['bi_annual_membership_dues'] = __('Bi-Annual Dues', 'wc-custom-renewal-pricing');
+        $columns['quarterly_membership_dues'] = __('Quarterly Dues', 'wc-custom-renewal-pricing');
         return $columns;
     }
     
@@ -478,16 +478,16 @@ class WC_Custom_Renewal_Pricing {
             return '—';
         }
         
-        if ($column_name == 'quarterly_membership_dues') {
-            $custom_price = get_user_meta($user_id, 'quarterly_membership_dues', true);
+        if ($column_name == 'bi_annual_membership_dues') {
+            $custom_price = get_user_meta($user_id, 'bi_annual_membership_dues', true);
             if ($custom_price && is_numeric($custom_price)) {
                 return wc_price($custom_price);
             }
             return '—';
         }
         
-        if ($column_name == 'bi_annual_membership_dues') {
-            $custom_price = get_user_meta($user_id, 'bi_annual_membership_dues', true);
+        if ($column_name == 'quarterly_membership_dues') {
+            $custom_price = get_user_meta($user_id, 'quarterly_membership_dues', true);
             if ($custom_price && is_numeric($custom_price)) {
                 return wc_price($custom_price);
             }
