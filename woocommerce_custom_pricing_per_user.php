@@ -98,22 +98,146 @@ class WC_Custom_Renewal_Pricing {
             return;
         }
         
-        $custom_price = get_user_meta($user->ID, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user->ID, 'annual_membership_dues', true);
+        $quarterly_price = get_user_meta($user->ID, 'quarterly_membership_dues', true);
+        $bi_annual_price = get_user_meta($user->ID, 'bi_annual_membership_dues', true);
         ?>
+        <style>
+            /* Hide number input spinners */
+            input[type=number].no-spinner::-webkit-outer-spin-button,
+            input[type=number].no-spinner::-webkit-inner-spin-button {
+                -webkit-appearance: none;
+                margin: 0;
+            }
+            input[type=number].no-spinner {
+                -moz-appearance: textfield;
+            }
+        </style>
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            // Format number with commas
+            function formatNumber(num) {
+                if (!num || num === '') return '';
+                return parseInt(num).toLocaleString('en-US');
+            }
+            
+            // Remove commas and parse number
+            function parseNumber(str) {
+                if (!str || str === '') return '';
+                return str.replace(/,/g, '');
+            }
+            
+            // Calculate and update derived fields
+            function updateDerivedFields() {
+                var annualInput = $('#annual_membership_dues');
+                var annualValue = parseNumber(annualInput.val());
+                
+                if (annualValue && !isNaN(annualValue) && annualValue > 0) {
+                    // Quarterly: annual / 4, rounded down to nearest 10
+                    var quarterly = Math.floor((annualValue / 4) / 10) * 10;
+                    $('#quarterly_membership_dues').val(formatNumber(quarterly));
+                    
+                    // Bi-Annual: annual * 1.85, rounded down to nearest 10
+                    var biAnnual = Math.floor((annualValue * 1.85) / 10) * 10;
+                    $('#bi_annual_membership_dues').val(formatNumber(biAnnual));
+                } else {
+                    $('#quarterly_membership_dues').val('');
+                    $('#bi_annual_membership_dues').val('');
+                }
+            }
+            
+            // Format annual field on load
+            var annualInput = $('#annual_membership_dues');
+            if (annualInput.val()) {
+                annualInput.val(formatNumber(annualInput.val()));
+            }
+            
+            // Format existing quarterly and bi-annual values
+            var quarterlyInput = $('#quarterly_membership_dues');
+            if (quarterlyInput.val()) {
+                quarterlyInput.val(formatNumber(quarterlyInput.val()));
+            }
+            
+            var biAnnualInput = $('#bi_annual_membership_dues');
+            if (biAnnualInput.val()) {
+                biAnnualInput.val(formatNumber(biAnnualInput.val()));
+            }
+            
+            // Handle annual input changes
+            annualInput.on('input', function() {
+                // Remove any non-numeric characters except commas
+                var value = $(this).val().replace(/[^\d,]/g, '');
+                // Remove commas for calculation
+                var numValue = parseNumber(value);
+                
+                // Update field with formatted value
+                if (numValue) {
+                    $(this).val(formatNumber(numValue));
+                }
+                
+                // Update derived fields
+                updateDerivedFields();
+            });
+            
+            // Ensure only whole numbers on blur
+            annualInput.on('blur', function() {
+                var value = parseNumber($(this).val());
+                if (value) {
+                    $(this).val(formatNumber(value));
+                }
+            });
+            
+            // Before form submit, convert formatted values back to plain numbers
+            $('form#your-profile').on('submit', function() {
+                var annualVal = parseNumber(annualInput.val());
+                if (annualVal) {
+                    annualInput.val(annualVal);
+                }
+            });
+        });
+        </script>
         <h3><?php _e('Subscription Settings', 'wc-custom-renewal-pricing'); ?></h3>
         <table class="form-table">
             <tr>
-                <th><label for="custom_renewal_price"><?php _e('Custom Renewal Price', 'wc-custom-renewal-pricing'); ?></label></th>
+                <th><label for="annual_membership_dues"><?php _e('Annual Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
                 <td>
-                    <input type="number" 
-                           name="custom_renewal_price" 
-                           id="custom_renewal_price" 
+                    <input type="text" 
+                           name="annual_membership_dues" 
+                           id="annual_membership_dues" 
                            value="<?php echo esc_attr($custom_price); ?>" 
-                           step="0.01" 
-                           min="0"
-                           class="regular-text" />
+                           class="regular-text no-spinner" 
+                           pattern="[0-9,]*"
+                           inputmode="numeric" />
                     <p class="description">
-                        <?php _e('Set a custom renewal price for this user\'s subscriptions. Leave empty to use default pricing.', 'wc-custom-renewal-pricing'); ?>
+                        <?php _e('Set the annual membership dues for this user\'s subscriptions. Whole numbers only. Leave empty to use default pricing.', 'wc-custom-renewal-pricing'); ?>
+                    </p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="quarterly_membership_dues"><?php _e('Quarterly Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
+                <td>
+                    <input type="text" 
+                           id="quarterly_membership_dues" 
+                           value="<?php echo esc_attr($quarterly_price); ?>" 
+                           class="regular-text" 
+                           readonly 
+                           style="background-color: #f0f0f1; cursor: not-allowed;" />
+                    <p class="description">
+                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest tenth.', 'wc-custom-renewal-pricing'); ?>
+                    </p>
+                </td>
+            </tr>
+            <tr>
+                <th><label for="bi_annual_membership_dues"><?php _e('Bi-Annual Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
+                <td>
+                    <input type="text" 
+                           id="bi_annual_membership_dues" 
+                           value="<?php echo esc_attr($bi_annual_price); ?>" 
+                           class="regular-text" 
+                           readonly 
+                           style="background-color: #f0f0f1; cursor: not-allowed;" />
+                    <p class="description">
+                        <?php _e('Automatically calculated as annual dues times 1.85 and rounded down to nearest tenth.', 'wc-custom-renewal-pricing'); ?>
                     </p>
                 </td>
             </tr>
@@ -129,9 +253,28 @@ class WC_Custom_Renewal_Pricing {
             return false;
         }
         
-        if (isset($_POST['custom_renewal_price'])) {
-            $custom_price = sanitize_text_field($_POST['custom_renewal_price']);
-            update_user_meta($user_id, 'custom_renewal_price', $custom_price);
+        if (isset($_POST['annual_membership_dues'])) {
+            // Remove commas and sanitize
+            $custom_price = str_replace(',', '', sanitize_text_field($_POST['annual_membership_dues']));
+            // Ensure it's a whole number
+            $custom_price = intval($custom_price);
+            
+            update_user_meta($user_id, 'annual_membership_dues', $custom_price);
+            
+            // Calculate and save related membership dues
+            if ($custom_price > 0) {
+                // Quarterly: annual / 4, rounded down to nearest 10
+                $quarterly = floor(($custom_price / 4) / 10) * 10;
+                update_user_meta($user_id, 'quarterly_membership_dues', $quarterly);
+                
+                // Bi-Annual: annual * 1.85, rounded down to nearest 10
+                $bi_annual = floor(($custom_price * 1.85) / 10) * 10;
+                update_user_meta($user_id, 'bi_annual_membership_dues', $bi_annual);
+            } else {
+                // Clear calculated values if annual is empty or invalid
+                delete_user_meta($user_id, 'quarterly_membership_dues');
+                delete_user_meta($user_id, 'bi_annual_membership_dues');
+            }
         }
     }
     
@@ -146,7 +289,7 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
             foreach ($subscription->get_items() as $item_id => $item) {
@@ -159,7 +302,7 @@ class WC_Custom_Renewal_Pricing {
             $subscription->save();
             
             $subscription->add_order_note(
-                sprintf(__('Custom renewal price applied: %s', 'wc-custom-renewal-pricing'), 
+                sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
                 wc_price($custom_price))
             );
         }
@@ -170,7 +313,7 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_renewal_order($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
             foreach ($renewal_order->get_items() as $item_id => $item) {
@@ -201,7 +344,7 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = get_current_user_id();
-        $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
             foreach ($cart->get_cart() as $cart_item) {
@@ -218,7 +361,7 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_new_subscription($subscription, $order, $recurring_cart) {
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
             foreach ($subscription->get_items() as $item_id => $item) {
@@ -241,11 +384,11 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price)) {
             echo '<div class="woocommerce-message" style="margin-top: 20px;">';
-            echo '<strong>' . __('Custom Renewal Price:', 'wc-custom-renewal-pricing') . '</strong> ';
+            echo '<strong>' . __('Annual Membership Dues:', 'wc-custom-renewal-pricing') . '</strong> ';
             echo wc_price($custom_price);
             echo ' <a href="' . admin_url('user-edit.php?user_id=' . $user_id) . '">' . __('Edit User Profile', 'wc-custom-renewal-pricing') . '</a>';
             echo '</div>';
@@ -256,7 +399,9 @@ class WC_Custom_Renewal_Pricing {
      * Add custom price column to users list
      */
     public function add_custom_price_column($columns) {
-        $columns['custom_renewal_price'] = __('Custom Renewal Price', 'wc-custom-renewal-pricing');
+        $columns['annual_membership_dues'] = __('Annual Membership Dues', 'wc-custom-renewal-pricing');
+        $columns['quarterly_membership_dues'] = __('Quarterly Dues', 'wc-custom-renewal-pricing');
+        $columns['bi_annual_membership_dues'] = __('Bi-Annual Dues', 'wc-custom-renewal-pricing');
         return $columns;
     }
     
@@ -264,13 +409,30 @@ class WC_Custom_Renewal_Pricing {
      * Show custom price in users list column
      */
     public function show_custom_price_column($value, $column_name, $user_id) {
-        if ($column_name == 'custom_renewal_price') {
-            $custom_price = get_user_meta($user_id, 'custom_renewal_price', true);
+        if ($column_name == 'annual_membership_dues') {
+            $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($custom_price && is_numeric($custom_price)) {
                 return wc_price($custom_price);
             }
             return '—';
         }
+        
+        if ($column_name == 'quarterly_membership_dues') {
+            $custom_price = get_user_meta($user_id, 'quarterly_membership_dues', true);
+            if ($custom_price && is_numeric($custom_price)) {
+                return wc_price($custom_price);
+            }
+            return '—';
+        }
+        
+        if ($column_name == 'bi_annual_membership_dues') {
+            $custom_price = get_user_meta($user_id, 'bi_annual_membership_dues', true);
+            if ($custom_price && is_numeric($custom_price)) {
+                return wc_price($custom_price);
+            }
+            return '—';
+        }
+        
         return $value;
     }
 }
