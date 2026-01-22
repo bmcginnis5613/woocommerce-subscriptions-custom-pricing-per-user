@@ -115,6 +115,7 @@ class WC_Custom_Renewal_Pricing {
         </style>
         <script type="text/javascript">
         jQuery(document).ready(function($) {
+            
             // Format number with commas
             function formatNumber(num) {
                 if (!num || num === '') return '';
@@ -146,8 +147,10 @@ class WC_Custom_Renewal_Pricing {
                 }
             }
             
-            // Format annual field on load
+            // Define annualInput FIRST
             var annualInput = $('#annual_membership_dues');
+            
+            // Format annual field on load
             if (annualInput.val()) {
                 annualInput.val(formatNumber(annualInput.val()));
             }
@@ -179,11 +182,13 @@ class WC_Custom_Renewal_Pricing {
                 updateDerivedFields();
             });
             
-            // Ensure only whole numbers on blur
+            // Round down to nearest 10 on blur
             annualInput.on('blur', function() {
                 var value = parseNumber($(this).val());
                 if (value) {
+                    value = Math.floor(value / 10) * 10;
                     $(this).val(formatNumber(value));
+                    updateDerivedFields();
                 }
             });
             
@@ -223,7 +228,7 @@ class WC_Custom_Renewal_Pricing {
                            readonly 
                            style="background-color: #f0f0f1; cursor: not-allowed;" />
                     <p class="description">
-                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest tenth.', 'wc-custom-renewal-pricing'); ?>
+                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest 10.', 'wc-custom-renewal-pricing'); ?>
                     </p>
                 </td>
             </tr>
@@ -237,7 +242,7 @@ class WC_Custom_Renewal_Pricing {
                            readonly 
                            style="background-color: #f0f0f1; cursor: not-allowed;" />
                     <p class="description">
-                        <?php _e('Automatically calculated as annual dues times 1.85 and rounded down to nearest tenth.', 'wc-custom-renewal-pricing'); ?>
+                        <?php _e('Automatically calculated as annual dues times 1.85 and rounded down to nearest 10.', 'wc-custom-renewal-pricing'); ?>
                     </p>
                 </td>
             </tr>
@@ -254,10 +259,11 @@ class WC_Custom_Renewal_Pricing {
         }
         
         if (isset($_POST['annual_membership_dues'])) {
-            // Remove commas and sanitize
             $custom_price = str_replace(',', '', sanitize_text_field($_POST['annual_membership_dues']));
             // Ensure it's a whole number
             $custom_price = intval($custom_price);
+            // Round down to nearest 10
+            $custom_price = floor($custom_price / 10) * 10;
             
             update_user_meta($user_id, 'annual_membership_dues', $custom_price);
             
