@@ -326,19 +326,9 @@ class WC_Custom_Renewal_Pricing {
                     }
                     
                     $latest_renewal->calculate_totals();
-                    $latest_renewal->save();
-                    
-                    $latest_renewal->add_order_note(
-                        sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
-                        wc_price($custom_price))
-                    );
+                    $latest_renewal->save();  
                 }
             }
-            
-            $subscription->add_order_note(
-                sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
-                wc_price($custom_price))
-            );
         }
     }
 
@@ -358,11 +348,6 @@ class WC_Custom_Renewal_Pricing {
             
             $renewal_order->calculate_totals();
             $renewal_order->save();
-            
-            $renewal_order->add_order_note(
-                sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
-                wc_price($custom_price))
-            );
         }
     }
 
