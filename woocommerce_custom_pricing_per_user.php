@@ -85,6 +85,10 @@ class WC_Custom_Renewal_Pricing {
         add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 5, 1);
         add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 10, 2);
         
+        // Set renewal date to last day of month (accounts for leap years)
+        add_action('woocommerce_checkout_subscription_created', array($this, 'set_renewal_to_last_day_of_month'), 10, 1);
+        add_action('woocommerce_subscription_payment_complete', array($this, 'set_next_renewal_to_last_day'), 10, 1);
+
         // Admin display
         add_action('woocommerce_subscription_details_after_subscription_table', array($this, 'display_custom_renewal_price_info'), 10, 1);
         
@@ -448,6 +452,124 @@ class WC_Custom_Renewal_Pricing {
             $subscription->calculate_totals();
             $subscription->save();
         }
+    }
+
+    /**
+     * Set subscription renewal to last day of the appropriate month based on interval
+     */
+    public function set_renewal_to_last_day_of_month($subscription_id) {
+        $subscription = wcs_get_subscription($subscription_id);
+        
+        if (!$subscription) {
+            return;
+        }
+        
+        // Get subscription billing interval and period
+        $interval = $subscription->get_billing_interval();
+        $period = $subscription->get_billing_period(); // day, week, month, year
+        
+        // Set timezone to EST
+        $timezone = new DateTimeZone('America/New_York');
+        $current_date = new DateTime('now', $timezone);
+        
+        // Calculate next payment date based on period and interval
+        if ($period == 'month') {
+            // Add the interval number of months
+            $current_date->modify("+$interval months");
+        } elseif ($period == 'year') {
+            // Add the interval number of years
+            $current_date->modify("+$interval years");
+        } else {
+            // For day or week periods
+            if ($period == 'week') {
+                $days = $interval * 7;
+            } else {
+                $days = $interval;
+            }
+            $current_date->modify("+$days days");
+        }
+        
+        // Get last day of the target month and set time to 9 AM EST
+        $target_year = $current_date->format('Y');
+        $target_month = $current_date->format('m');
+        $last_day = $current_date->format('t');
+        
+        // Create the next payment date at 9 AM EST
+        $next_payment_date_est = new DateTime("$target_year-$target_month-$last_day 09:00:00", $timezone);
+        
+        // Convert to GMT for WooCommerce
+        $next_payment_date_est->setTimezone(new DateTimeZone('GMT'));
+        $next_payment_date = $next_payment_date_est->format('Y-m-d H:i:s');
+        
+        // Update the subscription's next payment date
+        $subscription->update_dates(array(
+            'next_payment' => $next_payment_date,
+        ));
+        
+        $subscription->save();
+    }
+
+    /**
+     * Update next renewal date after a payment is processed
+     */
+    public function set_next_renewal_to_last_day($subscription) {
+        if (is_numeric($subscription)) {
+            $subscription = wcs_get_subscription($subscription);
+        }
+        
+        if (!$subscription) {
+            return;
+        }
+        
+        // Get subscription billing interval and period
+        $interval = $subscription->get_billing_interval();
+        $period = $subscription->get_billing_period();
+        
+        // Set timezone to EST
+        $timezone = new DateTimeZone('America/New_York');
+        
+        // Get the last payment date or current date as reference
+        $last_payment = $subscription->get_date('last_order_date_created');
+        if ($last_payment) {
+            $reference_date = new DateTime($last_payment, new DateTimeZone('GMT'));
+            $reference_date->setTimezone($timezone);
+        } else {
+            $reference_date = new DateTime('now', $timezone);
+        }
+        
+        // Calculate next payment date based on period and interval
+        if ($period == 'month') {
+            $reference_date->modify("+$interval months");
+        } elseif ($period == 'year') {
+            $reference_date->modify("+$interval years");
+        } else {
+            // For day or week periods
+            if ($period == 'week') {
+                $days = $interval * 7;
+            } else {
+                $days = $interval;
+            }
+            $reference_date->modify("+$days days");
+        }
+        
+        // Get last day of the target month and set time to 9 AM EST
+        $target_year = $reference_date->format('Y');
+        $target_month = $reference_date->format('m');
+        $last_day = $reference_date->format('t');
+        
+        // Create the next payment date at 9 AM EST
+        $next_payment_date_est = new DateTime("$target_year-$target_month-$last_day 09:00:00", $timezone);
+        
+        // Convert to GMT for WooCommerce
+        $next_payment_date_est->setTimezone(new DateTimeZone('GMT'));
+        $next_payment_date = $next_payment_date_est->format('Y-m-d H:i:s');
+        
+        // Update the subscription
+        $subscription->update_dates(array(
+            'next_payment' => $next_payment_date,
+        ));
+        
+        $subscription->save();
     }
 
     /**
