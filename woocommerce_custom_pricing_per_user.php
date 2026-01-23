@@ -304,6 +304,7 @@ class WC_Custom_Renewal_Pricing {
         $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
         if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+            // Update subscription line items
             foreach ($subscription->get_items() as $item_id => $item) {
                 $item->set_subtotal($custom_price);
                 $item->set_total($custom_price);
@@ -313,13 +314,34 @@ class WC_Custom_Renewal_Pricing {
             $subscription->calculate_totals();
             $subscription->save();
             
+            // Get the last renewal order and update it
+            $renewal_orders = $subscription->get_related_orders('all', 'renewal');
+            if (!empty($renewal_orders)) {
+                $latest_renewal = wc_get_order(reset($renewal_orders));
+                if ($latest_renewal && $latest_renewal->get_status() === 'pending') {
+                    foreach ($latest_renewal->get_items() as $item_id => $item) {
+                        $item->set_subtotal($custom_price);
+                        $item->set_total($custom_price);
+                        $item->save();
+                    }
+                    
+                    $latest_renewal->calculate_totals();
+                    $latest_renewal->save();
+                    
+                    $latest_renewal->add_order_note(
+                        sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
+                        wc_price($custom_price))
+                    );
+                }
+            }
+            
             $subscription->add_order_note(
                 sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
                 wc_price($custom_price))
             );
         }
     }
-    
+
     /**
      * Apply custom price to renewal orders when they're created
      */
@@ -336,6 +358,11 @@ class WC_Custom_Renewal_Pricing {
             
             $renewal_order->calculate_totals();
             $renewal_order->save();
+            
+            $renewal_order->add_order_note(
+                sprintf(__('Annual membership dues applied: %s', 'wc-custom-renewal-pricing'), 
+                wc_price($custom_price))
+            );
         }
     }
 
