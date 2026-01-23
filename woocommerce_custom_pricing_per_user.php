@@ -163,13 +163,15 @@ class WC_Custom_Renewal_Pricing {
             
             // Format existing quarterly and bi-annual values
             var quarterlyInput = $('#quarterly_membership_dues');
-            if (quarterlyInput.val()) {
-                quarterlyInput.val(formatNumber(quarterlyInput.val()));
+            var quarterlyValue = parseNumber(quarterlyInput.val());
+            if (quarterlyValue) {
+                quarterlyInput.val(formatNumber(quarterlyValue));
             }
             
             var biAnnualInput = $('#bi_annual_membership_dues');
-            if (biAnnualInput.val()) {
-                biAnnualInput.val(formatNumber(biAnnualInput.val()));
+            var biAnnualValue = parseNumber(biAnnualInput.val());
+            if (biAnnualValue) {
+                biAnnualInput.val(formatNumber(biAnnualValue));
             }
             
             // Handle annual input changes
