@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.0.1
+ * Version: 1.2.0
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -63,7 +63,18 @@ function wc_crp_init() {
  * Main Plugin Class
  */
 class WC_Custom_Renewal_Pricing {
+
+    /**
+     * Product ID to pricing field mapping
+     */
+    private $product_pricing_map = array(
+        94543 => 'annual_membership_dues',
+        94544 => 'bi_annual_membership_dues',
+        // Can add quarterly membership products here:
+        // 12345 => 'quarterly_membership_dues',
+    );
     
+
     /**
      * Constructor
      */
@@ -307,33 +318,61 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            // Update subscription line items
-            foreach ($subscription->get_items() as $item_id => $item) {
-                $item->set_subtotal($custom_price);
-                $item->set_total($custom_price);
-                $item->save();
-            }
+        // Update subscription line items
+        foreach ($subscription->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
             
-            $subscription->calculate_totals();
-            $subscription->save();
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
             
-            // Get the last renewal order and update it
-            $renewal_orders = $subscription->get_related_orders('all', 'renewal');
-            if (!empty($renewal_orders)) {
-                $latest_renewal = wc_get_order(reset($renewal_orders));
-                if ($latest_renewal && $latest_renewal->get_status() === 'pending') {
-                    foreach ($latest_renewal->get_items() as $item_id => $item) {
-                        $item->set_subtotal($custom_price);
-                        $item->set_total($custom_price);
-                        $item->save();
-                    }
-                    
-                    $latest_renewal->calculate_totals();
-                    $latest_renewal->save();  
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
                 }
+            }
+        }
+        
+        $subscription->calculate_totals();
+        $subscription->save();
+        
+        // Get the last renewal order and update it
+        $renewal_orders = $subscription->get_related_orders('all', 'renewal');
+        if (!empty($renewal_orders)) {
+            $latest_renewal = wc_get_order(reset($renewal_orders));
+            if ($latest_renewal && $latest_renewal->get_status() === 'pending') {
+                foreach ($latest_renewal->get_items() as $item_id => $item) {
+                    $product_id = $item->get_product_id();
+                    $variation_id = $item->get_variation_id();
+                    
+                    $check_id = $variation_id ? $variation_id : $product_id;
+                    
+                    if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                        $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                            ? $this->product_pricing_map[$check_id] 
+                            : $this->product_pricing_map[$product_id];
+                        
+                        $custom_price = get_user_meta($user_id, $pricing_field, true);
+                        
+                        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                            $item->set_subtotal($custom_price);
+                            $item->set_total($custom_price);
+                            $item->save();
+                        }
+                    }
+                }
+                
+                $latest_renewal->calculate_totals();
+                $latest_renewal->save();  
             }
         }
     }
@@ -343,18 +382,31 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_renewal_order($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            foreach ($renewal_order->get_items() as $item_id => $item) {
-                $item->set_subtotal($custom_price);
-                $item->set_total($custom_price);
-                $item->save();
-            }
+        foreach ($renewal_order->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
             
-            $renewal_order->calculate_totals();
-            $renewal_order->save();
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
+                }
+            }
         }
+        
+        $renewal_order->calculate_totals();
+        $renewal_order->save();
     }
 
     /**
@@ -374,12 +426,23 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = get_current_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            foreach ($cart->get_cart() as $cart_item) {
-                // Only apply to subscription products
-                if (class_exists('WC_Subscriptions_Product') && WC_Subscriptions_Product::is_subscription($cart_item['product_id'])) {
+        foreach ($cart->get_cart() as $cart_item) {
+            $product_id = $cart_item['product_id'];
+            $variation_id = isset($cart_item['variation_id']) ? $cart_item['variation_id'] : 0;
+            
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            // Also check parent product ID for variations
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     $cart_item['data']->set_price($custom_price);
                 }
             }
@@ -395,11 +458,20 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = get_current_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
+        $product_id = $cart_item['product_id'];
+        $variation_id = isset($cart_item['variation_id']) ? $cart_item['variation_id'] : 0;
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            // Only apply to subscription products
-            if (class_exists('WC_Subscriptions_Product') && WC_Subscriptions_Product::is_subscription($cart_item['product_id'])) {
+        // Check both product ID and variation ID
+        $check_id = $variation_id ? $variation_id : $product_id;
+        
+        if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+            $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                ? $this->product_pricing_map[$check_id] 
+                : $this->product_pricing_map[$product_id];
+            
+            $custom_price = get_user_meta($user_id, $pricing_field, true);
+            
+            if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                 return wc_price($custom_price);
             }
         }
@@ -416,10 +488,20 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = get_current_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
+        $product_id = $product->get_id();
+        $parent_id = $product->get_parent_id();
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            if (class_exists('WC_Subscriptions_Product') && WC_Subscriptions_Product::is_subscription($product->get_id())) {
+        // Check both product ID and parent ID for variations
+        $check_id = $parent_id ? $parent_id : $product_id;
+        
+        if (isset($this->product_pricing_map[$product_id]) || isset($this->product_pricing_map[$check_id])) {
+            $pricing_field = isset($this->product_pricing_map[$product_id]) 
+                ? $this->product_pricing_map[$product_id] 
+                : $this->product_pricing_map[$check_id];
+            
+            $custom_price = get_user_meta($user_id, $pricing_field, true);
+            
+            if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                 return wc_price($custom_price);
             }
         }
@@ -440,18 +522,31 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_new_subscription($subscription, $order, $recurring_cart) {
         $user_id = $subscription->get_user_id();
-        $custom_price = get_user_meta($user_id, 'annual_membership_dues', true);
         
-        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-            foreach ($subscription->get_items() as $item_id => $item) {
-                $item->set_subtotal($custom_price);
-                $item->set_total($custom_price);
-                $item->save();
-            }
+        foreach ($subscription->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
             
-            $subscription->calculate_totals();
-            $subscription->save();
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
+                }
+            }
         }
+        
+        $subscription->calculate_totals();
+        $subscription->save();
     }
 
     /**
