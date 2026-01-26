@@ -159,7 +159,7 @@ class WC_Custom_Renewal_Pricing {
                     var quarterly = Math.floor((annualValue / 4) / 10) * 10;
                     $('#quarterly_membership_dues').val(formatNumber(quarterly));
                     
-                    // Bi-Annual: annual * 1.85, rounded down to nearest 10
+                    // Biennial: annual * 1.85, rounded down to nearest 10
                     var biAnnual = Math.floor((annualValue * 1.85) / 10) * 10;
                     $('#bi_annual_membership_dues').val(formatNumber(biAnnual));
                 } else {
