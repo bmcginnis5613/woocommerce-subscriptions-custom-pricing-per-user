@@ -231,7 +231,7 @@ class WC_Custom_Renewal_Pricing {
                 </td>
             </tr>
             <tr>
-                <th><label for="bi_annual_membership_dues"><?php _e('Bi-Annual Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
+                <th><label for="bi_annual_membership_dues"><?php _e('Biennial Membership Dues', 'wc-custom-renewal-pricing'); ?></label></th>
                 <td>
                     <input type="text" 
                            id="bi_annual_membership_dues" 
