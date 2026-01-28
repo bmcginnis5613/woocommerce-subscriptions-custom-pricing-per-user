@@ -140,7 +140,9 @@ class WC_Custom_Renewal_Pricing {
             // Format number with commas
             function formatNumber(num) {
                 if (!num || num === '') return '';
-                return parseInt(num).toLocaleString('en-US');
+                // Remove any existing commas first
+                var cleanNum = String(num).replace(/,/g, '');
+                return parseInt(cleanNum).toLocaleString('en-US');
             }
             
             // Remove commas and parse number
@@ -171,22 +173,33 @@ class WC_Custom_Renewal_Pricing {
             // Define annualInput FIRST
             var annualInput = $('#annual_membership_dues');
             
-            // Format annual field on load
-            if (annualInput.val()) {
-                annualInput.val(formatNumber(annualInput.val()));
+            // Format annual field on load - FIXED
+            var annualValue = annualInput.val();
+            if (annualValue) {
+                // Parse first to remove any existing formatting, then format
+                var cleanValue = parseNumber(annualValue);
+                if (cleanValue) {
+                    annualInput.val(formatNumber(cleanValue));
+                }
             }
             
             // Format existing quarterly and bi-annual values
             var quarterlyInput = $('#quarterly_membership_dues');
-            var quarterlyValue = parseNumber(quarterlyInput.val());
+            var quarterlyValue = quarterlyInput.val();
             if (quarterlyValue) {
-                quarterlyInput.val(formatNumber(quarterlyValue));
+                var cleanQuarterly = parseNumber(quarterlyValue);
+                if (cleanQuarterly) {
+                    quarterlyInput.val(formatNumber(cleanQuarterly));
+                }
             }
             
             var biAnnualInput = $('#bi_annual_membership_dues');
-            var biAnnualValue = parseNumber(biAnnualInput.val());
+            var biAnnualValue = biAnnualInput.val();
             if (biAnnualValue) {
-                biAnnualInput.val(formatNumber(biAnnualValue));
+                var cleanBiAnnual = parseNumber(biAnnualValue);
+                if (cleanBiAnnual) {
+                    biAnnualInput.val(formatNumber(cleanBiAnnual));
+                }
             }
             
             // Handle annual input changes
