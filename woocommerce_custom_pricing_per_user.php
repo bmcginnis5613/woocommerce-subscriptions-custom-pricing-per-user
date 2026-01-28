@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.3
+ * Version: 1.2.4
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -92,13 +92,12 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
         add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
         
-        // Apply custom pricing to renewals - CRITICAL: Use priority 5 to run before email generation
-        add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 5, 1);
-        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 5, 2);
+        // Apply custom pricing to renewals - CRITICAL: Use priority 1 to run before email generation (emails run at priority 10)
+        add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 1, 1);
+        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 1, 2);
         
-        // FIXED: Add filter to ensure line item prices display correctly in emails
-        add_filter('woocommerce_order_item_get_subtotal', array($this, 'fix_renewal_order_item_subtotal'), 10, 2);
-        add_filter('woocommerce_order_item_get_total', array($this, 'fix_renewal_order_item_total'), 10, 2);
+        // Additional hook to catch renewals created before scheduled payment
+        add_filter('wcs_renewal_order_created', array($this, 'apply_custom_price_on_renewal_creation'), 1, 2);
         
         // Set renewal date to last day of month (accounts for leap years)
         add_action('woocommerce_checkout_subscription_created', array($this, 'set_renewal_to_last_day_of_month'), 10, 1);
@@ -374,92 +373,6 @@ class WC_Custom_Renewal_Pricing {
     }
     
     /**
-     * Force renewal order line item subtotals to use saved values
-     */
-    public function fix_renewal_order_item_subtotal($subtotal, $item) {
-        $order = $item->get_order();
-        
-        if (!$order) {
-            return $subtotal;
-        }
-        
-        // Check if this is a renewal order or subscription
-        $is_renewal = false;
-        
-        if (function_exists('wcs_order_contains_renewal') && wcs_order_contains_renewal($order)) {
-            $is_renewal = true;
-        }
-        
-        if (function_exists('wcs_is_subscription') && wcs_is_subscription($order)) {
-            $is_renewal = true;
-        }
-        
-        // For renewal orders, only apply to recent orders (created in the last hour)
-        // This prevents historical orders from being affected
-        if ($is_renewal) {
-            $order_created = $order->get_date_created();
-            if ($order_created) {
-                $one_hour_ago = time() - HOUR_IN_SECONDS;
-                if ($order_created->getTimestamp() < $one_hour_ago) {
-                    return $subtotal;
-                }
-            }
-        }
-        
-        // If not a renewal-related order, return original subtotal
-        if (!$is_renewal) {
-            return $subtotal;
-        }
-        
-        // For recent renewal orders, return the saved subtotal value
-        // The subtotal should already be set correctly by apply_custom_price_to_renewal_order
-        return $subtotal;
-    }
-    
-    /**
-     * Force renewal order line item totals to use saved values
-     */
-    public function fix_renewal_order_item_total($total, $item) {
-        $order = $item->get_order();
-        
-        if (!$order) {
-            return $total;
-        }
-        
-        // Check if this is a renewal order or subscription
-        $is_renewal = false;
-        
-        if (function_exists('wcs_order_contains_renewal') && wcs_order_contains_renewal($order)) {
-            $is_renewal = true;
-        }
-        
-        if (function_exists('wcs_is_subscription') && wcs_is_subscription($order)) {
-            $is_renewal = true;
-        }
-        
-        // For renewal orders, only apply to recent orders (created in the last hour)
-        // This prevents historical orders from being affected
-        if ($is_renewal) {
-            $order_created = $order->get_date_created();
-            if ($order_created) {
-                $one_hour_ago = time() - HOUR_IN_SECONDS;
-                if ($order_created->getTimestamp() < $one_hour_ago) {
-                    return $total;
-                }
-            }
-        }
-        
-        // If not a renewal-related order, return original total
-        if (!$is_renewal) {
-            return $total;
-        }
-        
-        // For recent renewal orders, return the saved total value
-        // The total should already be set correctly by apply_custom_price_to_renewal_order
-        return $total;
-    }
-    
-    /**
      * Apply custom price before renewal payment is processed
      */
     public function apply_user_custom_renewal_price($subscription_id) {
@@ -471,7 +384,7 @@ class WC_Custom_Renewal_Pricing {
         
         $user_id = $subscription->get_user_id();
         
-        // Update subscription line items
+        // Update subscription line items with current custom pricing
         foreach ($subscription->get_items() as $item_id => $item) {
             $product_id = $item->get_product_id();
             $variation_id = $item->get_variation_id();
@@ -496,37 +409,6 @@ class WC_Custom_Renewal_Pricing {
         
         $subscription->calculate_totals();
         $subscription->save();
-        
-        // Get the last renewal order and update it
-        $renewal_orders = $subscription->get_related_orders('all', 'renewal');
-        if (!empty($renewal_orders)) {
-            $latest_renewal = wc_get_order(reset($renewal_orders));
-            if ($latest_renewal && $latest_renewal->get_status() === 'pending') {
-                foreach ($latest_renewal->get_items() as $item_id => $item) {
-                    $product_id = $item->get_product_id();
-                    $variation_id = $item->get_variation_id();
-                    
-                    $check_id = $variation_id ? $variation_id : $product_id;
-                    
-                    if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                        $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                            ? $this->product_pricing_map[$check_id] 
-                            : $this->product_pricing_map[$product_id];
-                        
-                        $custom_price = get_user_meta($user_id, $pricing_field, true);
-                        
-                        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                            $item->set_subtotal($custom_price);
-                            $item->set_total($custom_price);
-                            $item->save();
-                        }
-                    }
-                }
-                
-                $latest_renewal->calculate_totals();
-                $latest_renewal->save();  
-            }
-        }
     }
 
     /**
@@ -550,6 +432,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
+                // Get the CURRENT custom price from user meta
                 $custom_price = get_user_meta($user_id, $pricing_field, true);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
@@ -572,6 +455,15 @@ class WC_Custom_Renewal_Pricing {
             $renewal_order->calculate_totals();
             $renewal_order->save();
         }
+    }
+
+    /**
+     * Additional hook to catch renewal orders created via wcs_renewal_order_created filter
+     */
+    public function apply_custom_price_on_renewal_creation($renewal_order, $subscription) {
+        // Call the same function to ensure consistency
+        $this->apply_custom_price_to_renewal_order($renewal_order, $subscription);
+        return $renewal_order;
     }
 
     /**
