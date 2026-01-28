@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.0
+ * Version: 1.2.2
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -70,7 +70,7 @@ class WC_Custom_Renewal_Pricing {
     private $product_pricing_map = array(
         94543 => 'annual_membership_dues',
         94544 => 'bi_annual_membership_dues',
-        // Can add quarterly membership products here:
+        // Can associate quarterly membership price to products here or others:
         // 12345 => 'quarterly_membership_dues',
     );
     
@@ -109,6 +109,13 @@ class WC_Custom_Renewal_Pricing {
         
         // Force cart fragments refresh
         add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
+        
+        // Update order line items to reflect current custom pricing in emails and order received page
+        add_filter('woocommerce_order_item_get_subtotal', array($this, 'update_order_item_price_display'), 10, 2);
+        add_filter('woocommerce_order_item_get_total', array($this, 'update_order_item_price_display'), 10, 2);
+        
+        // Hook into order creation to update prices
+        add_action('woocommerce_checkout_order_created', array($this, 'update_order_prices_on_creation'), 10, 1);
     }
 
     /**
@@ -318,6 +325,106 @@ class WC_Custom_Renewal_Pricing {
                 delete_user_meta($user_id, 'bi_annual_membership_dues');
             }
         }
+    }
+    
+    /**
+     * Update order prices when order is created at checkout
+     */
+    public function update_order_prices_on_creation($order) {
+        // Don't apply custom pricing to subscription switch orders
+        if (function_exists('wcs_order_contains_switch') && wcs_order_contains_switch($order)) {
+            return;
+        }
+        
+        $user_id = $order->get_user_id();
+        
+        if (!$user_id) {
+            return;
+        }
+        
+        $updated = false;
+        
+        foreach ($order->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
+                    $updated = true;
+                }
+            }
+        }
+        
+        if ($updated) {
+            $order->calculate_totals();
+            $order->save();
+        }
+    }
+    
+    /**
+     * Update order item price display for emails and order received page
+     * This filter runs when the order item price is retrieved for display
+     */
+    public function update_order_item_price_display($price, $item) {
+        // Get the order from the item
+        $order = $item->get_order();
+        
+        if (!$order) {
+            return $price;
+        }
+        
+        // Don't apply custom pricing to subscription switch orders
+        if (function_exists('wcs_order_contains_switch') && wcs_order_contains_switch($order)) {
+            return $price;
+        }
+        
+        // Only apply to recent orders (created in the last hour)
+        // This prevents historical orders from being affected
+        $order_created = $order->get_date_created();
+        if ($order_created) {
+            $one_hour_ago = time() - HOUR_IN_SECONDS;
+            if ($order_created->getTimestamp() < $one_hour_ago) {
+                return $price;
+            }
+        }
+        
+        $user_id = $order->get_user_id();
+        
+        if (!$user_id) {
+            return $price;
+        }
+        
+        $product_id = $item->get_product_id();
+        $variation_id = $item->get_variation_id();
+        
+        // Check both product ID and variation ID
+        $check_id = $variation_id ? $variation_id : $product_id;
+        
+        if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+            $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                ? $this->product_pricing_map[$check_id] 
+                : $this->product_pricing_map[$product_id];
+            
+            $custom_price = get_user_meta($user_id, $pricing_field, true);
+            
+            if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                return $custom_price;
+            }
+        }
+        
+        return $price;
     }
     
     /**
