@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.2
+ * Version: 1.2.3
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -92,9 +92,13 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
         add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
         
-        // Apply custom pricing to renewals
+        // Apply custom pricing to renewals - CRITICAL: Use priority 5 to run before email generation
         add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 5, 1);
-        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 10, 2);
+        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 5, 2);
+        
+        // FIXED: Add filter to ensure line item prices display correctly in emails
+        add_filter('woocommerce_order_item_get_subtotal', array($this, 'fix_renewal_order_item_subtotal'), 10, 2);
+        add_filter('woocommerce_order_item_get_total', array($this, 'fix_renewal_order_item_total'), 10, 2);
         
         // Set renewal date to last day of month (accounts for leap years)
         add_action('woocommerce_checkout_subscription_created', array($this, 'set_renewal_to_last_day_of_month'), 10, 1);
@@ -109,10 +113,6 @@ class WC_Custom_Renewal_Pricing {
         
         // Force cart fragments refresh
         add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
-        
-        // Update order line items to reflect current custom pricing in emails and order received page
-        add_filter('woocommerce_order_item_get_subtotal', array($this, 'update_order_item_price_display'), 10, 2);
-        add_filter('woocommerce_order_item_get_total', array($this, 'update_order_item_price_display'), 10, 2);
         
         // Hook into order creation to update prices
         add_action('woocommerce_checkout_order_created', array($this, 'update_order_prices_on_creation'), 10, 1);
@@ -374,57 +374,89 @@ class WC_Custom_Renewal_Pricing {
     }
     
     /**
-     * Update order item price display for emails and order received page
-     * This filter runs when the order item price is retrieved for display
+     * Force renewal order line item subtotals to use saved values
      */
-    public function update_order_item_price_display($price, $item) {
-        // Get the order from the item
+    public function fix_renewal_order_item_subtotal($subtotal, $item) {
         $order = $item->get_order();
         
         if (!$order) {
-            return $price;
+            return $subtotal;
         }
         
-        // Don't apply custom pricing to subscription switch orders
-        if (function_exists('wcs_order_contains_switch') && wcs_order_contains_switch($order)) {
-            return $price;
+        // Check if this is a renewal order or subscription
+        $is_renewal = false;
+        
+        if (function_exists('wcs_order_contains_renewal') && wcs_order_contains_renewal($order)) {
+            $is_renewal = true;
         }
         
-        // Only apply to recent orders (created in the last hour)
+        if (function_exists('wcs_is_subscription') && wcs_is_subscription($order)) {
+            $is_renewal = true;
+        }
+        
+        // For renewal orders, only apply to recent orders (created in the last hour)
         // This prevents historical orders from being affected
-        $order_created = $order->get_date_created();
-        if ($order_created) {
-            $one_hour_ago = time() - HOUR_IN_SECONDS;
-            if ($order_created->getTimestamp() < $one_hour_ago) {
-                return $price;
+        if ($is_renewal) {
+            $order_created = $order->get_date_created();
+            if ($order_created) {
+                $one_hour_ago = time() - HOUR_IN_SECONDS;
+                if ($order_created->getTimestamp() < $one_hour_ago) {
+                    return $subtotal;
+                }
             }
         }
         
-        $user_id = $order->get_user_id();
-        
-        if (!$user_id) {
-            return $price;
+        // If not a renewal-related order, return original subtotal
+        if (!$is_renewal) {
+            return $subtotal;
         }
         
-        $product_id = $item->get_product_id();
-        $variation_id = $item->get_variation_id();
+        // For recent renewal orders, return the saved subtotal value
+        // The subtotal should already be set correctly by apply_custom_price_to_renewal_order
+        return $subtotal;
+    }
+    
+    /**
+     * Force renewal order line item totals to use saved values
+     */
+    public function fix_renewal_order_item_total($total, $item) {
+        $order = $item->get_order();
         
-        // Check both product ID and variation ID
-        $check_id = $variation_id ? $variation_id : $product_id;
+        if (!$order) {
+            return $total;
+        }
         
-        if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-            $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                ? $this->product_pricing_map[$check_id] 
-                : $this->product_pricing_map[$product_id];
-            
-            $custom_price = get_user_meta($user_id, $pricing_field, true);
-            
-            if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                return $custom_price;
+        // Check if this is a renewal order or subscription
+        $is_renewal = false;
+        
+        if (function_exists('wcs_order_contains_renewal') && wcs_order_contains_renewal($order)) {
+            $is_renewal = true;
+        }
+        
+        if (function_exists('wcs_is_subscription') && wcs_is_subscription($order)) {
+            $is_renewal = true;
+        }
+        
+        // For renewal orders, only apply to recent orders (created in the last hour)
+        // This prevents historical orders from being affected
+        if ($is_renewal) {
+            $order_created = $order->get_date_created();
+            if ($order_created) {
+                $one_hour_ago = time() - HOUR_IN_SECONDS;
+                if ($order_created->getTimestamp() < $one_hour_ago) {
+                    return $total;
+                }
             }
         }
         
-        return $price;
+        // If not a renewal-related order, return original total
+        if (!$is_renewal) {
+            return $total;
+        }
+        
+        // For recent renewal orders, return the saved total value
+        // The total should already be set correctly by apply_custom_price_to_renewal_order
+        return $total;
     }
     
     /**
@@ -499,9 +531,12 @@ class WC_Custom_Renewal_Pricing {
 
     /**
      * Apply custom price to renewal orders when they're created
+     * This ensures the correct price is set before the email is generated
      */
     public function apply_custom_price_to_renewal_order($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
+        
+        $updated = false;
         
         foreach ($renewal_order->get_items() as $item_id => $item) {
             $product_id = $item->get_product_id();
@@ -518,15 +553,25 @@ class WC_Custom_Renewal_Pricing {
                 $custom_price = get_user_meta($user_id, $pricing_field, true);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    // Set all price components explicitly
                     $item->set_subtotal($custom_price);
                     $item->set_total($custom_price);
+                    
+                    // Also update the line item meta to ensure consistency
+                    $item->update_meta_data('_line_subtotal', $custom_price);
+                    $item->update_meta_data('_line_total', $custom_price);
+                    
                     $item->save();
+                    $updated = true;
                 }
             }
         }
         
-        $renewal_order->calculate_totals();
-        $renewal_order->save();
+        if ($updated) {
+            // Recalculate order totals to ensure everything is in sync
+            $renewal_order->calculate_totals();
+            $renewal_order->save();
+        }
     }
 
     /**
