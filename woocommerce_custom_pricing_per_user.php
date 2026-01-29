@@ -92,7 +92,7 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
         add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
         
-        // Apply custom pricing to renewals - CRITICAL: Use priority 1 to run before email generation (emails run at priority 10)
+        // Apply custom pricing to renewals
         add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 1, 1);
         add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 1, 2);
         
@@ -373,7 +373,7 @@ class WC_Custom_Renewal_Pricing {
                     // Force recalculation
                     $subscription->calculate_totals();
                     
-                    // CRITICAL: Ensure the recurring total meta is updated
+                    // Ensure the recurring total meta is updated
                     update_post_meta($subscription->get_id(), '_order_total', $subscription->get_total());
                     
                     // Save the subscription object to trigger internal hooks
@@ -428,6 +428,7 @@ class WC_Custom_Renewal_Pricing {
      * Update order prices when order is created at checkout
      */
     public function update_order_prices_on_creation($order) {
+        
         // Don't apply custom pricing to subscription switch orders
         if (function_exists('wcs_order_contains_switch') && wcs_order_contains_switch($order)) {
             return;
@@ -534,7 +535,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                // Get the CURRENT custom price from user meta
+                // Get the current custom price from user meta
                 $custom_price = get_user_meta($user_id, $pricing_field, true);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
@@ -561,7 +562,6 @@ class WC_Custom_Renewal_Pricing {
 
     /**
      * Forces the subscription total display to match the custom user pricing.
-     * This fixes the Admin List and My Account "Total" columns.
      */
     public function filter_subscription_total_display($total, $subscription) {
         $user_id = $subscription->get_user_id();
@@ -606,10 +606,10 @@ class WC_Custom_Renewal_Pricing {
             return $value;
         }
 
-        // Get the parent object (The Subscription)
+        // Get the parent object (the subscription)
         $order = $item->get_order();
         
-        // Ensure we are dealing with a Subscription object
+        // Ensure we are dealing with a subscription object
         if (!$order || !is_a($order, 'WC_Subscription')) {
             return $value;
         }
