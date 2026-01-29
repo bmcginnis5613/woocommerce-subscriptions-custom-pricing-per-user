@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.0
+ * Version: 1.2.4
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -70,7 +70,7 @@ class WC_Custom_Renewal_Pricing {
     private $product_pricing_map = array(
         94543 => 'annual_membership_dues',
         94544 => 'bi_annual_membership_dues',
-        // Can add quarterly membership products here:
+        // Can associate quarterly membership price to products here or others:
         // 12345 => 'quarterly_membership_dues',
     );
     
@@ -92,9 +92,15 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
         add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
         
-        // Apply custom pricing to renewals
-        add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 5, 1);
-        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 10, 2);
+        // Apply custom pricing to renewals - CRITICAL: Use priority 1 to run before email generation (emails run at priority 10)
+        add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 1, 1);
+        add_action('woocommerce_subscription_renewal_order_created', array($this, 'apply_custom_price_to_renewal_order'), 1, 2);
+        
+        // Additional hook to catch renewals created before scheduled payment
+        add_filter('wcs_renewal_order_created', array($this, 'apply_custom_price_on_renewal_creation'), 1, 2);
+        
+        // Update subscription recurring total when renewal is created
+        add_action('woocommerce_subscription_renewal_order_created', array($this, 'update_subscription_recurring_total'), 5, 2);
         
         // Set renewal date to last day of month (accounts for leap years)
         add_action('woocommerce_checkout_subscription_created', array($this, 'set_renewal_to_last_day_of_month'), 10, 1);
@@ -109,6 +115,14 @@ class WC_Custom_Renewal_Pricing {
         
         // Force cart fragments refresh
         add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
+        
+        // Hook into order creation to update prices
+        add_action('woocommerce_checkout_order_created', array($this, 'update_order_prices_on_creation'), 10, 1);
+
+        // Update subscription if we change price after order is created
+        add_filter('woocommerce_subscription_get_total', array($this, 'filter_subscription_total_display'), 10, 2);
+        add_filter('woocommerce_order_item_get_subtotal', array($this, 'filter_subscription_item_display_price'), 10, 3);
+        add_filter('woocommerce_order_item_get_total', array($this, 'filter_subscription_item_display_price'), 10, 3);
     }
 
     /**
@@ -317,6 +331,138 @@ class WC_Custom_Renewal_Pricing {
                 delete_user_meta($user_id, 'quarterly_membership_dues');
                 delete_user_meta($user_id, 'bi_annual_membership_dues');
             }
+            
+            $subscriptions = wcs_get_users_subscriptions($user_id);
+            
+            // Update all active subscriptions
+            foreach ($subscriptions as $subscription) {
+                if (!$subscription->has_status(array('active', 'pending-cancel'))) {
+                    continue;
+                }
+                
+                $updated = false;
+                
+                foreach ($subscription->get_items() as $item_id => $item) {
+                    $product_id = $item->get_product_id();
+                    $variation_id = $item->get_variation_id();
+                    
+                    // Check both product ID and variation ID
+                    $check_id = $variation_id ? $variation_id : $product_id;
+                    
+                    if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                        $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                            ? $this->product_pricing_map[$check_id] 
+                            : $this->product_pricing_map[$product_id];
+                        
+                        $new_price = get_user_meta($user_id, $pricing_field, true);
+                        
+                        if ($new_price && is_numeric($new_price) && $new_price >= 0) {
+                            $item->set_subtotal($new_price);
+                            $item->set_total($new_price);
+                            $item->save();
+                            $updated = true;
+                        }
+                    }
+                }
+                
+                if ($updated) {
+                    // Force recalculation
+                    $subscription->calculate_totals();
+                    
+                    // CRITICAL: Ensure the recurring total meta is updated
+                    update_post_meta($subscription->get_id(), '_order_total', $subscription->get_total());
+                    
+                    // Save the subscription object to trigger internal hooks
+                    $subscription->save();
+                    
+                    // Clear the specific subscription cache
+                    wp_cache_delete($subscription->get_id(), 'posts');
+                    wc_delete_shop_order_transients($subscription->get_id());
+                }
+            }
+            
+            // Update any pending renewal orders
+            foreach ($subscriptions as $subscription) {
+                // Get the last order
+                $last_order = $subscription->get_last_order('all');
+                
+                if ($last_order && $last_order->has_status('pending')) {
+                    $order_updated = false;
+                    
+                    foreach ($last_order->get_items() as $item_id => $item) {
+                        $product_id = $item->get_product_id();
+                        $variation_id = $item->get_variation_id();
+                        
+                        $check_id = $variation_id ? $variation_id : $product_id;
+                        
+                        if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                            $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                                ? $this->product_pricing_map[$check_id] 
+                                : $this->product_pricing_map[$product_id];
+                            
+                            $new_price = get_user_meta($user_id, $pricing_field, true);
+                            
+                            if ($new_price && is_numeric($new_price) && $new_price >= 0) {
+                                $item->set_subtotal($new_price);
+                                $item->set_total($new_price);
+                                $item->save();
+                                $order_updated = true;
+                            }
+                        }
+                    }
+                    
+                    if ($order_updated) {
+                        $last_order->calculate_totals();
+                        $last_order->save();
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Update order prices when order is created at checkout
+     */
+    public function update_order_prices_on_creation($order) {
+        // Don't apply custom pricing to subscription switch orders
+        if (function_exists('wcs_order_contains_switch') && wcs_order_contains_switch($order)) {
+            return;
+        }
+        
+        $user_id = $order->get_user_id();
+        
+        if (!$user_id) {
+            return;
+        }
+        
+        $updated = false;
+        
+        foreach ($order->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
+                    $updated = true;
+                }
+            }
+        }
+        
+        if ($updated) {
+            $order->calculate_totals();
+            $order->save();
         }
     }
     
@@ -331,8 +477,9 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = $subscription->get_user_id();
+        $updated = false;
         
-        // Update subscription line items
+        // Update subscription line items with current custom pricing
         foreach ($subscription->get_items() as $item_id => $item) {
             $product_id = $item->get_product_id();
             $variation_id = $item->get_variation_id();
@@ -351,50 +498,25 @@ class WC_Custom_Renewal_Pricing {
                     $item->set_subtotal($custom_price);
                     $item->set_total($custom_price);
                     $item->save();
+                    $updated = true;
                 }
             }
         }
         
-        $subscription->calculate_totals();
-        $subscription->save();
-        
-        // Get the last renewal order and update it
-        $renewal_orders = $subscription->get_related_orders('all', 'renewal');
-        if (!empty($renewal_orders)) {
-            $latest_renewal = wc_get_order(reset($renewal_orders));
-            if ($latest_renewal && $latest_renewal->get_status() === 'pending') {
-                foreach ($latest_renewal->get_items() as $item_id => $item) {
-                    $product_id = $item->get_product_id();
-                    $variation_id = $item->get_variation_id();
-                    
-                    $check_id = $variation_id ? $variation_id : $product_id;
-                    
-                    if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                        $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                            ? $this->product_pricing_map[$check_id] 
-                            : $this->product_pricing_map[$product_id];
-                        
-                        $custom_price = get_user_meta($user_id, $pricing_field, true);
-                        
-                        if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                            $item->set_subtotal($custom_price);
-                            $item->set_total($custom_price);
-                            $item->save();
-                        }
-                    }
-                }
-                
-                $latest_renewal->calculate_totals();
-                $latest_renewal->save();  
-            }
+        if ($updated) {
+            $subscription->calculate_totals();
+            $subscription->save();
         }
     }
 
     /**
      * Apply custom price to renewal orders when they're created
+     * This ensures the correct price is set before the email is generated
      */
     public function apply_custom_price_to_renewal_order($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
+        
+        $updated = false;
         
         foreach ($renewal_order->get_items() as $item_id => $item) {
             $product_id = $item->get_product_id();
@@ -408,18 +530,152 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
+                // Get the CURRENT custom price from user meta
                 $custom_price = get_user_meta($user_id, $pricing_field, true);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
+                    // Set all price components explicitly
                     $item->set_subtotal($custom_price);
                     $item->set_total($custom_price);
+                    
+                    // Also update the line item meta to ensure consistency
+                    $item->update_meta_data('_line_subtotal', $custom_price);
+                    $item->update_meta_data('_line_total', $custom_price);
+                    
                     $item->save();
+                    $updated = true;
                 }
             }
         }
         
-        $renewal_order->calculate_totals();
-        $renewal_order->save();
+        if ($updated) {
+            // Recalculate order totals to ensure everything is in sync
+            $renewal_order->calculate_totals();
+            $renewal_order->save();
+        }
+    }
+
+    /**
+     * Forces the subscription total display to match the custom user pricing.
+     * This fixes the Admin List and My Account "Total" columns.
+     */
+    public function filter_subscription_total_display($total, $subscription) {
+        $user_id = $subscription->get_user_id();
+        $custom_total = 0;
+        $has_custom = false;
+
+        foreach ($subscription->get_items() as $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            $check_id = $variation_id ? $variation_id : $product_id;
+
+            if (isset($this->product_pricing_map[$check_id])) {
+                $field = $this->product_pricing_map[$check_id];
+                $price = get_user_meta($user_id, $field, true);
+                
+                if ($price !== '' && is_numeric($price)) {
+                    $custom_total += (float) $price * $item->get_quantity();
+                    $has_custom = true;
+                } else {
+                    $custom_total += (float) $item->get_total();
+                }
+            } else {
+                $custom_total += (float) $item->get_total();
+            }
+        }
+
+        // Include taxes/fees if you want them to be part of the display total
+        if ($has_custom) {
+            return $custom_total + $subscription->get_total_tax() + $subscription->get_shipping_total();
+        }
+
+        return $total;
+    }
+
+    /**
+     * Filters the individual line item subtotal and total display 
+     * for the "My Account" subscription table.
+     */
+    public function filter_subscription_item_display_price($value, $item, $read_only = false) {
+        // Only target line items (not shipping or taxes)
+        if (!is_a($item, 'WC_Order_Item_Product')) {
+            return $value;
+        }
+
+        // Get the parent object (The Subscription)
+        $order = $item->get_order();
+        
+        // Ensure we are dealing with a Subscription object
+        if (!$order || !is_a($order, 'WC_Subscription')) {
+            return $value;
+        }
+
+        $user_id = $order->get_user_id();
+        $product_id = $item->get_product_id();
+        $variation_id = $item->get_variation_id();
+        $check_id = $variation_id ? $variation_id : $product_id;
+
+        // Check if this product has a custom price mapping
+        if (isset($this->product_pricing_map[$check_id])) {
+            $field = $this->product_pricing_map[$check_id];
+            $custom_price = get_user_meta($user_id, $field, true);
+
+            if ($custom_price !== '' && is_numeric($custom_price)) {
+                // Return the custom price multiplied by quantity
+                return (float) $custom_price * $item->get_quantity();
+            }
+        }
+
+        return $value;
+    }
+
+    /**
+     * Additional hook to catch renewal orders created via wcs_renewal_order_created filter
+     */
+    public function apply_custom_price_on_renewal_creation($renewal_order, $subscription) {
+        // Call the same function to ensure consistency
+        $this->apply_custom_price_to_renewal_order($renewal_order, $subscription);
+        return $renewal_order;
+    }
+
+    /**
+     * Ensure subscription line items are updated and totals recalculated.
+     */
+    public function update_subscription_recurring_total($renewal_order, $subscription) {
+        $user_id = $subscription->get_user_id();
+        $updated = false;
+        
+        foreach ($subscription->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($custom_price !== '' && is_numeric($custom_price) && $custom_price >= 0) {
+                    $item->set_subtotal($custom_price);
+                    $item->set_total($custom_price);
+                    $item->save();
+                    $updated = true;
+                }
+            }
+        }
+        
+        if ($updated) {
+            $subscription->calculate_totals();
+            // Force update the meta directly
+            update_post_meta($subscription->get_id(), '_order_total', $subscription->get_total());
+            $subscription->save();
+            
+            // Clear caches
+            wp_cache_delete($subscription->get_id(), 'posts');
+            wc_delete_shop_order_transients($subscription->get_id());
+        }
     }
 
     /**
