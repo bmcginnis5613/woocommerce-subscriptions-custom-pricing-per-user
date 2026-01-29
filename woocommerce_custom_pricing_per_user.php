@@ -123,6 +123,10 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_subscription_get_total', array($this, 'filter_subscription_total_display'), 10, 2);
         add_filter('woocommerce_order_item_get_subtotal', array($this, 'filter_subscription_item_display_price'), 10, 3);
         add_filter('woocommerce_order_item_get_total', array($this, 'filter_subscription_item_display_price'), 10, 3);
+
+        // By default, WooCommerce Subscriptions will calculate the next payment date for a subscription from the time of the last payment. 
+        // This snippet changes it to calculate the next payment date from the scheduled payment date, not the time the payment was actually processed.
+        add_filter( 'wcs_calculate_next_payment_from_last_payment', '__return_false' );
     }
 
     /**
