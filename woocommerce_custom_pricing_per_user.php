@@ -191,7 +191,7 @@ class WC_Custom_Renewal_Pricing {
             // Define annualInput FIRST
             var annualInput = $('#annual_membership_dues');
             
-            // Format annual field on load - FIXED
+            // Format annual field on load
             var annualValue = annualInput.val();
             if (annualValue) {
                 // Parse first to remove any existing formatting, then format
