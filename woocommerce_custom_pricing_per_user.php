@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.5
+ * Version: 1.2.6
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -68,10 +68,12 @@ class WC_Custom_Renewal_Pricing {
      * Product ID to pricing field mapping
      */
     private $product_pricing_map = array(
+        // CEN/SEN memberships
         94543 => 'annual_membership_dues',
         94544 => 'bi_annual_membership_dues',
-        // Can associate quarterly membership price to products here or others:
-        // 12345 => 'quarterly_membership_dues',
+        // CEBI memberships
+        95067 => 'quarterly_membership_dues',
+        95066 => 'annual_membership_dues',
     );
     
 
