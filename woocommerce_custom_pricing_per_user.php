@@ -356,7 +356,7 @@ class WC_Custom_Renewal_Pricing {
                     }
                 }
 
-                // Update the Last Order only if it is unpaid/pending
+                // 2. Update the Last Order ONLY if it is unpaid/pending
                 // This covers: 
                 // - Pending Renewals waiting for payment
                 // - Initial Parent Orders that failed and are being retried
