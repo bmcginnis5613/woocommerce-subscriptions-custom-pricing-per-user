@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.2.4
+ * Version: 1.2.5
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -338,83 +338,40 @@ class WC_Custom_Renewal_Pricing {
             
             $subscriptions = wcs_get_users_subscriptions($user_id);
             
-            // Update all active subscriptions
+            // Loop through each subscription once to handle Sub, Parent Order, and Last Order
             foreach ($subscriptions as $subscription) {
-                if (!$subscription->has_status(array('active', 'pending-cancel'))) {
-                    continue;
-                }
                 
-                $updated = false;
-                
-                foreach ($subscription->get_items() as $item_id => $item) {
-                    $product_id = $item->get_product_id();
-                    $variation_id = $item->get_variation_id();
+                // 1. Update the Subscription Object (Recurring Totals)
+                if ($subscription->has_status(array('active', 'pending-cancel', 'on-hold', 'pending'))) {
+                    $sub_updated = $this->update_order_items_price($subscription, $user_id);
                     
-                    // Check both product ID and variation ID
-                    $check_id = $variation_id ? $variation_id : $product_id;
-                    
-                    if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                        $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                            ? $this->product_pricing_map[$check_id] 
-                            : $this->product_pricing_map[$product_id];
+                    if ($sub_updated) {
+                        $subscription->calculate_totals();
+                        update_post_meta($subscription->get_id(), '_order_total', $subscription->get_total());
+                        $subscription->save();
                         
-                        $new_price = get_user_meta($user_id, $pricing_field, true);
-                        
-                        if ($new_price && is_numeric($new_price) && $new_price >= 0) {
-                            $item->set_subtotal($new_price);
-                            $item->set_total($new_price);
-                            $item->save();
-                            $updated = true;
-                        }
+                        // Clear caches
+                        wp_cache_delete($subscription->get_id(), 'posts');
+                        wc_delete_shop_order_transients($subscription->get_id());
                     }
                 }
-                
-                if ($updated) {
-                    // Force recalculation
-                    $subscription->calculate_totals();
-                    
-                    // Ensure the recurring total meta is updated
-                    update_post_meta($subscription->get_id(), '_order_total', $subscription->get_total());
-                    
-                    // Save the subscription object to trigger internal hooks
-                    $subscription->save();
-                    
-                    // Clear the specific subscription cache
-                    wp_cache_delete($subscription->get_id(), 'posts');
-                    wc_delete_shop_order_transients($subscription->get_id());
+
+                // 2. Update the Parent Order (The Original Order)
+                $parent_order = $subscription->get_parent();
+                // Check if parent order exists and is editable (exclude refunded/cancelled if desired, though here we just check existence)
+                if ($parent_order && !$parent_order->has_status(array('refunded', 'cancelled'))) {
+                    $parent_updated = $this->update_order_items_price($parent_order, $user_id);
+                    if ($parent_updated) {
+                        $parent_order->calculate_totals();
+                        $parent_order->save();
+                    }
                 }
-            }
-            
-            // Update any pending renewal orders
-            foreach ($subscriptions as $subscription) {
-                // Get the last order
+
+                // 3. Update the Last Renewal Order (Pending/On-Hold/Failed)
                 $last_order = $subscription->get_last_order('all');
-                
-                if ($last_order && $last_order->has_status('pending')) {
-                    $order_updated = false;
-                    
-                    foreach ($last_order->get_items() as $item_id => $item) {
-                        $product_id = $item->get_product_id();
-                        $variation_id = $item->get_variation_id();
-                        
-                        $check_id = $variation_id ? $variation_id : $product_id;
-                        
-                        if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                            $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                                ? $this->product_pricing_map[$check_id] 
-                                : $this->product_pricing_map[$product_id];
-                            
-                            $new_price = get_user_meta($user_id, $pricing_field, true);
-                            
-                            if ($new_price && is_numeric($new_price) && $new_price >= 0) {
-                                $item->set_subtotal($new_price);
-                                $item->set_total($new_price);
-                                $item->save();
-                                $order_updated = true;
-                            }
-                        }
-                    }
-                    
+                // Expanded status check to include on-hold and failed, which are common for unpaid renewals
+                if ($last_order && $last_order->has_status(array('pending', 'on-hold', 'failed'))) {
+                    $order_updated = $this->update_order_items_price($last_order, $user_id);
                     if ($order_updated) {
                         $last_order->calculate_totals();
                         $last_order->save();
@@ -422,6 +379,43 @@ class WC_Custom_Renewal_Pricing {
                 }
             }
         }
+    }
+
+    /**
+     * Helper function to update items within an order/subscription object
+     */
+    private function update_order_items_price($order_object, $user_id) {
+        $updated = false;
+        
+        foreach ($order_object->get_items() as $item_id => $item) {
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            
+            // Check both product ID and variation ID
+            $check_id = $variation_id ? $variation_id : $product_id;
+            
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $pricing_field = isset($this->product_pricing_map[$check_id]) 
+                    ? $this->product_pricing_map[$check_id] 
+                    : $this->product_pricing_map[$product_id];
+                
+                $new_price = get_user_meta($user_id, $pricing_field, true);
+                
+                if ($new_price && is_numeric($new_price) && $new_price >= 0) {
+                    $item->set_subtotal($new_price);
+                    $item->set_total($new_price);
+                    
+                    // Also update line meta for consistency
+                    $item->update_meta_data('_line_subtotal', $new_price);
+                    $item->update_meta_data('_line_total', $new_price);
+                    
+                    $item->save();
+                    $updated = true;
+                }
+            }
+        }
+        
+        return $updated;
     }
     
     /**
