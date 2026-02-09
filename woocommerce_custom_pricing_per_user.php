@@ -79,6 +79,27 @@ class WC_Custom_Renewal_Pricing {
         95261 => 'bi_annual_membership_dues',    
     );
     
+    /**
+     * Get user price for a pricing field, calculating derived fields on-the-fly
+     */
+    private function get_user_price_for_field($user_id, $field) {
+        if ($field === 'annual_membership_dues') {
+            return get_user_meta($user_id, 'annual_membership_dues', true);
+        } elseif ($field === 'quarterly_membership_dues') {
+            $annual = get_user_meta($user_id, 'annual_membership_dues', true);
+            if ($annual && is_numeric($annual) && $annual > 0) {
+                return floor(($annual / 4) / 10) * 10;
+            }
+            return '';
+        } elseif ($field === 'bi_annual_membership_dues') {
+            $annual = get_user_meta($user_id, 'annual_membership_dues', true);
+            if ($annual && is_numeric($annual) && $annual > 0) {
+                return floor(($annual * 1.85) / 10) * 10;
+            }
+            return '';
+        }
+        return '';
+    }
 
     /**
      * Constructor
@@ -143,8 +164,12 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $custom_price = get_user_meta($user->ID, 'annual_membership_dues', true);
-        $quarterly_price = get_user_meta($user->ID, 'quarterly_membership_dues', true);
-        $bi_annual_price = get_user_meta($user->ID, 'bi_annual_membership_dues', true);
+        $quarterly_price = '';
+        $bi_annual_price = '';
+        if ($custom_price && is_numeric($custom_price) && $custom_price > 0) {
+            $quarterly_price = floor(($custom_price / 4) / 10) * 10;
+            $bi_annual_price = floor(($custom_price * 1.85) / 10) * 10;
+        }
         ?>
         <style>
             /* Hide number input spinners */
@@ -326,20 +351,7 @@ class WC_Custom_Renewal_Pricing {
             
             update_user_meta($user_id, 'annual_membership_dues', $custom_price);
             
-            // Calculate and save related membership dues
-            if ($custom_price > 0) {
-                // Quarterly: annual / 4, rounded down to nearest 10
-                $quarterly = floor(($custom_price / 4) / 10) * 10;
-                update_user_meta($user_id, 'quarterly_membership_dues', $quarterly);
-                
-                // Bi-Annual: annual * 1.85, rounded down to nearest 10
-                $bi_annual = floor(($custom_price * 1.85) / 10) * 10;
-                update_user_meta($user_id, 'bi_annual_membership_dues', $bi_annual);
-            } else {
-                // Clear calculated values if annual is empty or invalid
-                delete_user_meta($user_id, 'quarterly_membership_dues');
-                delete_user_meta($user_id, 'bi_annual_membership_dues');
-            }
+            // Don't save calculated values - they will be computed on-the-fly
             
             $subscriptions = wcs_get_users_subscriptions($user_id);
             
@@ -398,7 +410,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $new_price = get_user_meta($user_id, $pricing_field, true);
+                $new_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($new_price && is_numeric($new_price) && $new_price >= 0) {
                     $item->set_subtotal($new_price);
@@ -447,7 +459,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     $item->set_subtotal($custom_price);
@@ -490,7 +502,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     $item->set_subtotal($custom_price);
@@ -529,7 +541,7 @@ class WC_Custom_Renewal_Pricing {
                     : $this->product_pricing_map[$product_id];
                 
                 // Get the current custom price from user meta
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     // Set all price components explicitly
@@ -568,7 +580,7 @@ class WC_Custom_Renewal_Pricing {
 
             if (isset($this->product_pricing_map[$check_id])) {
                 $field = $this->product_pricing_map[$check_id];
-                $price = get_user_meta($user_id, $field, true);
+                $price = $this->get_user_price_for_field($user_id, $field);
                 
                 if ($price !== '' && is_numeric($price)) {
                     $custom_total += (float) $price * $item->get_quantity();
@@ -615,7 +627,7 @@ class WC_Custom_Renewal_Pricing {
         // Check if this product has a custom price mapping
         if (isset($this->product_pricing_map[$check_id])) {
             $field = $this->product_pricing_map[$check_id];
-            $custom_price = get_user_meta($user_id, $field, true);
+            $custom_price = $this->get_user_price_for_field($user_id, $field);
 
             if ($custom_price !== '' && is_numeric($custom_price)) {
                 // Return the custom price multiplied by quantity
@@ -652,7 +664,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price !== '' && is_numeric($custom_price) && $custom_price >= 0) {
                     $item->set_subtotal($custom_price);
@@ -706,7 +718,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     $cart_item['data']->set_price($custom_price);
@@ -735,7 +747,7 @@ class WC_Custom_Renewal_Pricing {
                 ? $this->product_pricing_map[$check_id] 
                 : $this->product_pricing_map[$product_id];
             
-            $custom_price = get_user_meta($user_id, $pricing_field, true);
+            $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
             
             if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                 return wc_price($custom_price);
@@ -765,7 +777,7 @@ class WC_Custom_Renewal_Pricing {
                 ? $this->product_pricing_map[$product_id] 
                 : $this->product_pricing_map[$check_id];
             
-            $custom_price = get_user_meta($user_id, $pricing_field, true);
+            $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
             
             if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                 return wc_price($custom_price);
@@ -801,7 +813,7 @@ class WC_Custom_Renewal_Pricing {
                     ? $this->product_pricing_map[$check_id] 
                     : $this->product_pricing_map[$product_id];
                 
-                $custom_price = get_user_meta($user_id, $pricing_field, true);
+                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
                 
                 if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
                     $item->set_subtotal($custom_price);
@@ -976,17 +988,19 @@ class WC_Custom_Renewal_Pricing {
         }
         
         if ($column_name == 'bi_annual_membership_dues') {
-            $custom_price = get_user_meta($user_id, 'bi_annual_membership_dues', true);
-            if ($custom_price && is_numeric($custom_price)) {
-                return wc_price($custom_price);
+            $annual = get_user_meta($user_id, 'annual_membership_dues', true);
+            if ($annual && is_numeric($annual) && $annual > 0) {
+                $bi_annual = floor(($annual * 1.85) / 10) * 10;
+                return wc_price($bi_annual);
             }
             return '—';
         }
         
         if ($column_name == 'quarterly_membership_dues') {
-            $custom_price = get_user_meta($user_id, 'quarterly_membership_dues', true);
-            if ($custom_price && is_numeric($custom_price)) {
-                return wc_price($custom_price);
+            $annual = get_user_meta($user_id, 'annual_membership_dues', true);
+            if ($annual && is_numeric($annual) && $annual > 0) {
+                $quarterly = floor(($annual / 4) / 10) * 10;
+                return wc_price($quarterly);
             }
             return '—';
         }
