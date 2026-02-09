@@ -74,6 +74,9 @@ class WC_Custom_Renewal_Pricing {
         // CEBI memberships
         95067 => 'quarterly_membership_dues',
         95066 => 'annual_membership_dues',
+        // CEO100 memberhsips
+        95260 => 'annual_membership_dues',
+        95261 => 'bi_annual_membership_dues',    
     );
     
 
