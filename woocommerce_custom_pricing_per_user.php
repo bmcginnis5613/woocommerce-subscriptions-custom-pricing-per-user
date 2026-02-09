@@ -350,9 +350,7 @@ class WC_Custom_Renewal_Pricing {
             $custom_price = floor($custom_price / 10) * 10;
             
             update_user_meta($user_id, 'annual_membership_dues', $custom_price);
-            
-            // Don't save calculated values - they will be computed on-the-fly
-            
+                        
             $subscriptions = wcs_get_users_subscriptions($user_id);
             
             foreach ($subscriptions as $subscription) {
