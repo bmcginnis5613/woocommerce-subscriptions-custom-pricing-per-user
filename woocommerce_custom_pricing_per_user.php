@@ -78,8 +78,8 @@ class WC_Custom_Renewal_Pricing {
         95260 => 'annual_membership_dues',
         95261 => 'bi_annual_membership_dues',    
         // CEORT memberships
-        97000 => 'annual_membership_dues',
-        97001 => 'quarterly_undiscounted_membership_dues',
+        96185 => 'annual_membership_dues',
+        96184 => 'quarterly_undiscounted_membership_dues',
     );
     
     /**
