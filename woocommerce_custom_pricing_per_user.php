@@ -77,6 +77,9 @@ class WC_Custom_Renewal_Pricing {
         // CEO100 memberships
         95260 => 'annual_membership_dues',
         95261 => 'bi_annual_membership_dues',    
+        // CEO Roundtable memberships
+        97000 => 'annual_membership_dues',
+        97001 => 'quarterly_undiscounted_membership_dues',
     );
     
     /**
@@ -95,6 +98,15 @@ class WC_Custom_Renewal_Pricing {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
                 return floor(($annual * 1.85) / 10) * 10;
+            }
+            return '';
+        } elseif ($field === 'quarterly_undiscounted_membership_dues') {
+            // CEORT annual dues are already 15% discounted.
+            // Reverse the discount to get the undiscounted annual rate, then divide by 4.
+            $annual_discounted = get_user_meta($user_id, 'annual_membership_dues', true);
+            if ($annual_discounted && is_numeric($annual_discounted) && $annual_discounted > 0) {
+                $annual_undiscounted = $annual_discounted / 0.85;
+                return floor(($annual_undiscounted / 4) / 10) * 10;
             }
             return '';
         }
