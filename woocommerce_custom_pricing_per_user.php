@@ -101,12 +101,12 @@ class WC_Custom_Renewal_Pricing {
             }
             return '';
         } elseif ($field === 'quarterly_undiscounted_membership_dues') {
-            // CEORT annual dues are already 15% discounted.
+            // CEORT annual dues are already 10.6% discounted.
             // Reverse the discount to get the undiscounted annual rate, then divide by 4.
             $annual_discounted = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual_discounted && is_numeric($annual_discounted) && $annual_discounted > 0) {
-                $annual_undiscounted = $annual_discounted / 0.85;
-                return floor(($annual_undiscounted / 4) / 10) * 10;
+                $annual_undiscounted = $annual_discounted / 0.894;
+                return ceil(($annual_undiscounted / 4) / 10) * 10;
             }
             return '';
         }
