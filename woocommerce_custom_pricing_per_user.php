@@ -106,7 +106,7 @@ class WC_Custom_Renewal_Pricing {
             $annual_discounted = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual_discounted && is_numeric($annual_discounted) && $annual_discounted > 0) {
                 $annual_undiscounted = $annual_discounted / 0.894;
-                return ceil(($annual_undiscounted / 4) / 10) * 10;
+                return floor(($annual_undiscounted / 4) / 10) * 10;
             }
             return '';
         }
