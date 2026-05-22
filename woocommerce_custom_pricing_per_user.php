@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -165,6 +165,13 @@ class WC_Custom_Renewal_Pricing {
         // By default, WooCommerce Subscriptions will calculate the next payment date for a subscription from the time of the last payment. 
         // This snippet changes it to calculate the next payment date from the scheduled payment date, not the time the payment was actually processed.
         add_filter( 'wcs_calculate_next_payment_from_last_payment', '__return_false' );
+
+        // Admin-created subscriptions/orders: apply custom pricing when adding items manually.
+        add_action( 'admin_footer-post.php', array( $this, 'admin_add_customer_to_order_item_ajax' ) );
+        add_action( 'admin_footer-post-new.php', array( $this, 'admin_add_customer_to_order_item_ajax' ) );
+
+        add_action( 'woocommerce_ajax_order_items_added', array( $this, 'apply_custom_price_to_admin_added_items' ), 20, 2 );
+        add_action( 'woocommerce_order_before_calculate_totals', array( $this, 'apply_custom_price_before_admin_order_totals' ), 20, 2 );
     }
 
     /**
@@ -1016,6 +1023,127 @@ class WC_Custom_Renewal_Pricing {
         }
         
         return $value;
+    }
+
+    /**
+     * Send the currently selected admin customer with WooCommerce order-item AJAX requests.
+     *
+     * This is needed on post-new.php?post_type=shop_subscription because the selected
+     * customer is not saved to the subscription until the admin saves the post.
+     */
+    public function admin_add_customer_to_order_item_ajax() {
+        if ( ! function_exists( 'get_current_screen' ) ) {
+            return;
+        }
+
+        $screen = get_current_screen();
+
+        if (
+            ! $screen ||
+            empty( $screen->post_type ) ||
+            ! in_array( $screen->post_type, array( 'shop_subscription', 'shop_order' ), true )
+        ) {
+            return;
+        }
+        ?>
+        <script type="text/javascript">
+        jQuery(function($) {
+            function wcCrpAddCustomerToAjax(e, data) {
+                data.wc_crp_customer_user = $('#customer_user').val() || $('[name="customer_user"]').val() || 0;
+                return data;
+            }
+
+            $('#woocommerce-order-items')
+                .on('woocommerce_order_meta_box_add_items_ajax_data', wcCrpAddCustomerToAjax)
+                .on('woocommerce_order_meta_box_recalculate_ajax_data', wcCrpAddCustomerToAjax)
+                .on('woocommerce_order_meta_box_save_line_items_ajax_data', wcCrpAddCustomerToAjax);
+        });
+        </script>
+        <?php
+    }
+
+    /**
+     * Get the customer ID for admin-created order/subscription pricing.
+     */
+    private function get_admin_order_customer_id_for_pricing( $order = null ) {
+        $user_id = 0;
+
+        if ( $order && is_object( $order ) && method_exists( $order, 'get_user_id' ) ) {
+            $user_id = absint( $order->get_user_id() );
+        }
+
+        foreach ( array( 'wc_crp_customer_user', 'customer_user', '_customer_user', 'user_id' ) as $key ) {
+            if ( $user_id || ! isset( $_POST[ $key ] ) ) {
+                continue;
+            }
+
+            $posted_value = wp_unslash( $_POST[ $key ] );
+
+            if ( is_array( $posted_value ) ) {
+                continue;
+            }
+
+            $user_id = absint( $posted_value );
+        }
+
+        return $user_id;
+    }
+
+    /**
+     * Apply mapped custom user pricing to an order/subscription object in admin.
+     */
+    private function apply_custom_prices_to_admin_order_object( $order, $recalculate = true ) {
+        if ( is_numeric( $order ) ) {
+            $order = wc_get_order( absint( $order ) );
+        }
+
+        if ( ! $order || ! is_object( $order ) || ! method_exists( $order, 'get_items' ) ) {
+            return false;
+        }
+
+        $user_id = $this->get_admin_order_customer_id_for_pricing( $order );
+
+        if ( ! $user_id ) {
+            return false;
+        }
+
+        $updated = $this->update_order_items_price( $order, $user_id );
+
+        if ( $updated && $recalculate ) {
+            $order->calculate_totals();
+            $order->save();
+
+            if ( function_exists( 'wc_delete_shop_order_transients' ) ) {
+                wc_delete_shop_order_transients( $order->get_id() );
+            }
+        }
+
+        return $updated;
+    }
+
+    /**
+     * Runs immediately after products are added via the admin "Add product(s)" modal.
+     */
+    public function apply_custom_price_to_admin_added_items( $added_items, $order ) {
+        if ( ! is_admin() ) {
+            return;
+        }
+
+        $this->apply_custom_prices_to_admin_order_object( $order, true );
+    }
+
+    /**
+     * Runs when the admin presses "Recalculate".
+     *
+     * Do not call calculate_totals() inside this callback because WooCommerce is
+     * already inside calculate_totals() when this hook fires.
+     */
+    public function apply_custom_price_before_admin_order_totals( $and_taxes, $order ) {
+        if ( ! is_admin() ) {
+            return;
+        }
+
+        $this->apply_custom_prices_to_admin_order_object( $order, false );
     }
 }
 
