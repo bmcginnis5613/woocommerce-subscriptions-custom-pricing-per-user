@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.1
+ * Version: 1.3.2
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -114,6 +114,49 @@ class WC_Custom_Renewal_Pricing {
     }
 
     /**
+     * Check whether the user currently has a CEORT subscription.
+     */
+    private function user_has_ceort_membership($user_id) {
+        if (!function_exists('wcs_get_users_subscriptions')) {
+            return false;
+        }
+
+        $ceort_product_ids = array(96184, 96185);
+        $subscriptions = wcs_get_users_subscriptions($user_id);
+
+        foreach ($subscriptions as $subscription) {
+            if (!is_object($subscription)) {
+                continue;
+            }
+
+            if (
+                method_exists($subscription, 'has_status') &&
+                !$subscription->has_status(array('active', 'pending-cancel', 'on-hold', 'pending'))
+            ) {
+                continue;
+            }
+
+            if (!method_exists($subscription, 'get_items')) {
+                continue;
+            }
+
+            foreach ($subscription->get_items() as $item) {
+                $product_id = (int) $item->get_product_id();
+                $variation_id = (int) $item->get_variation_id();
+
+                if (
+                    in_array($product_id, $ceort_product_ids, true) ||
+                    in_array($variation_id, $ceort_product_ids, true)
+                ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Constructor
      */
     public function __construct() {
@@ -185,8 +228,11 @@ class WC_Custom_Renewal_Pricing {
         $custom_price = get_user_meta($user->ID, 'annual_membership_dues', true);
         $quarterly_price = '';
         $bi_annual_price = '';
+        $has_ceort_membership = $this->user_has_ceort_membership($user->ID);
         if ($custom_price && is_numeric($custom_price) && $custom_price > 0) {
-            $quarterly_price = floor(($custom_price / 4) / 10) * 10;
+            $quarterly_price = $has_ceort_membership
+                ? $this->get_user_price_for_field($user->ID, 'quarterly_undiscounted_membership_dues')
+                : floor(($custom_price / 4) / 10) * 10;
             $bi_annual_price = floor(($custom_price * 1.85) / 10) * 10;
         }
         ?>
@@ -203,6 +249,7 @@ class WC_Custom_Renewal_Pricing {
         </style>
         <script type="text/javascript">
         jQuery(document).ready(function($) {
+            var hasCeortMembership = <?php echo $has_ceort_membership ? 'true' : 'false'; ?>;
             
             // Format number with commas
             function formatNumber(num) {
@@ -224,8 +271,9 @@ class WC_Custom_Renewal_Pricing {
                 var annualValue = parseNumber(annualInput.val());
                 
                 if (annualValue && !isNaN(annualValue) && annualValue > 0) {
-                    // Quarterly: annual / 4, rounded down to nearest 10
-                    var quarterly = Math.floor((annualValue / 4) / 10) * 10;
+                    // CEORT annual dues are discounted; reverse the discount for quarterly dues.
+                    var quarterlyBase = hasCeortMembership ? annualValue / 0.894 : annualValue;
+                    var quarterly = Math.floor((quarterlyBase / 4) / 10) * 10;
                     $('#quarterly_membership_dues').val(formatNumber(quarterly));
                     
                     // Biennial: annual * 1.85, rounded down to nearest 10
@@ -345,7 +393,13 @@ class WC_Custom_Renewal_Pricing {
                            readonly 
                            style="background-color: #f0f0f1; cursor: not-allowed;" />
                     <p class="description">
-                        <?php _e('Automatically calculated as annual dues divided by four and rounded down to nearest 10.', 'wc-custom-renewal-pricing'); ?>
+                        <?php
+                        if ($has_ceort_membership) {
+                            _e('Automatically calculated by reversing the CEORT annual discount, dividing by four, and rounding down to nearest 10.', 'wc-custom-renewal-pricing');
+                        } else {
+                            _e('Automatically calculated as annual dues divided by four and rounded down to nearest 10.', 'wc-custom-renewal-pricing');
+                        }
+                        ?>
                     </p>
                 </td>
             </tr>
