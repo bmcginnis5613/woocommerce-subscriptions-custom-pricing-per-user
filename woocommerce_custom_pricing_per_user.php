@@ -215,6 +215,7 @@ class WC_Custom_Renewal_Pricing {
 
         add_action( 'woocommerce_ajax_order_items_added', array( $this, 'apply_custom_price_to_admin_added_items' ), 20, 2 );
         add_action( 'woocommerce_order_before_calculate_totals', array( $this, 'apply_custom_price_before_admin_order_totals' ), 20, 2 );
+        add_action( 'woocommerce_subscription_before_calculate_totals', array( $this, 'apply_custom_price_before_admin_order_totals' ), 20, 2 );
     }
 
     /**
@@ -805,76 +806,127 @@ class WC_Custom_Renewal_Pricing {
     }
 
     /**
-     * Forces the subscription total display to match the custom user pricing.
+     * Forces the subscription total display to match the custom user pricing,
+     * while respecting coupon discounts on subscriptions.
      */
     public function filter_subscription_total_display($total, $subscription) {
+        if (!$subscription || !is_a($subscription, 'WC_Subscription')) {
+            return $total;
+        }
+
         $user_id = $subscription->get_user_id();
-        $custom_total = 0;
-        $has_custom = false;
 
-        foreach ($subscription->get_items() as $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            $check_id = $variation_id ? $variation_id : $product_id;
+        if (!$user_id) {
+            return $total;
+        }
 
-            if (isset($this->product_pricing_map[$check_id])) {
-                $field = $this->product_pricing_map[$check_id];
-                $price = $this->get_user_price_for_field($user_id, $field);
-                
-                if ($price !== '' && is_numeric($price)) {
-                    $custom_total += (float) $price * $item->get_quantity();
-                    $has_custom = true;
-                } else {
-                    $custom_total += (float) $item->get_total();
-                }
-            } else {
-                $custom_total += (float) $item->get_total();
+        $custom_items_subtotal = 0;
+        $actual_items_total    = 0;
+        $has_custom            = false;
+
+        foreach ($subscription->get_items('line_item') as $item) {
+            if (!is_a($item, 'WC_Order_Item_Product')) {
+                continue;
             }
+
+            $product_id   = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            $check_id     = $variation_id ? $variation_id : $product_id;
+
+            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
+                $field = isset($this->product_pricing_map[$check_id])
+                    ? $this->product_pricing_map[$check_id]
+                    : $this->product_pricing_map[$product_id];
+
+                $price = $this->get_user_price_for_field($user_id, $field);
+
+                if ($price !== '' && is_numeric($price)) {
+                    $custom_items_subtotal += (float) $price * max(1, (int) $item->get_quantity());
+                    $actual_items_total    += (float) $item->get_total();
+                    $has_custom = true;
+                    continue;
+                }
+            }
+
+            $custom_items_subtotal += (float) $item->get_subtotal();
+            $actual_items_total    += (float) $item->get_total();
         }
 
-        // Include taxes/fees if you want them to be part of the display total
-        if ($has_custom) {
-            return $custom_total + $subscription->get_total_tax() + $subscription->get_shipping_total();
+        if (!$has_custom) {
+            return $total;
         }
 
-        return $total;
+        $has_coupons = !empty($subscription->get_items('coupon'));
+
+        /*
+         * If the subscription has coupons, trust the post-discount item totals.
+         * The old version rebuilt the subscription total from the custom subtotal,
+         * which visually removed coupon discounts in the Subscriptions admin tab.
+         */
+        $items_total = $has_coupons ? $actual_items_total : $custom_items_subtotal;
+
+        $shipping_total = method_exists($subscription, 'get_shipping_total') ? (float) $subscription->get_shipping_total() : 0;
+        $cart_tax       = method_exists($subscription, 'get_cart_tax') ? (float) $subscription->get_cart_tax() : 0;
+        $shipping_tax   = method_exists($subscription, 'get_shipping_tax') ? (float) $subscription->get_shipping_tax() : 0;
+        $fee_total      = method_exists($subscription, 'get_total_fees') ? (float) $subscription->get_total_fees() : 0;
+
+        return max(0, $items_total + $shipping_total + $cart_tax + $shipping_tax + $fee_total);
     }
 
     /**
-     * Filters the individual line item subtotal and total display 
-     * for the "My Account" subscription table.
+     * Filters the individual line item subtotal and total display
+     * for subscription views.
+     *
+     * Subtotal should show the user's custom pre-discount price.
+     * Total should not override coupon-discounted totals when coupons exist.
      */
     public function filter_subscription_item_display_price($value, $item, $read_only = false) {
-        // Only target line items (not shipping or taxes)
         if (!is_a($item, 'WC_Order_Item_Product')) {
             return $value;
         }
 
-        // Get the parent object (the subscription)
         $order = $item->get_order();
-        
-        // Ensure we are dealing with a subscription object
+
         if (!$order || !is_a($order, 'WC_Subscription')) {
             return $value;
         }
 
         $user_id = $order->get_user_id();
-        $product_id = $item->get_product_id();
-        $variation_id = $item->get_variation_id();
-        $check_id = $variation_id ? $variation_id : $product_id;
 
-        // Check if this product has a custom price mapping
-        if (isset($this->product_pricing_map[$check_id])) {
-            $field = $this->product_pricing_map[$check_id];
-            $custom_price = $this->get_user_price_for_field($user_id, $field);
-
-            if ($custom_price !== '' && is_numeric($custom_price)) {
-                // Return the custom price multiplied by quantity
-                return (float) $custom_price * $item->get_quantity();
-            }
+        if (!$user_id) {
+            return $value;
         }
 
-        return $value;
+        $product_id   = $item->get_product_id();
+        $variation_id = $item->get_variation_id();
+        $check_id     = $variation_id ? $variation_id : $product_id;
+
+        if (!isset($this->product_pricing_map[$check_id]) && !isset($this->product_pricing_map[$product_id])) {
+            return $value;
+        }
+
+        $field = isset($this->product_pricing_map[$check_id])
+            ? $this->product_pricing_map[$check_id]
+            : $this->product_pricing_map[$product_id];
+
+        $custom_price = $this->get_user_price_for_field($user_id, $field);
+
+        if ($custom_price === '' || !is_numeric($custom_price)) {
+            return $value;
+        }
+
+        $has_coupons = !empty($order->get_items('coupon'));
+
+        /*
+         * Never override a post-discount line total when a coupon exists.
+         * This is what caused coupons to appear in the Subscriptions tab while
+         * the displayed subscription line total/order total stayed at the custom price.
+         */
+        if (current_filter() === 'woocommerce_order_item_get_total' && $has_coupons) {
+            return $value;
+        }
+
+        return (float) $custom_price * max(1, (int) $item->get_quantity());
     }
 
     /**
@@ -1360,8 +1412,20 @@ class WC_Custom_Renewal_Pricing {
      * Do not call calculate_totals() inside this callback because WooCommerce is
      * already inside calculate_totals() when this hook fires.
      */
-    public function apply_custom_price_before_admin_order_totals( $and_taxes, $order ) {
+    public function apply_custom_price_before_admin_order_totals( $and_taxes, $order = null ) {
         if ( ! is_admin() ) {
+            return;
+        }
+
+        /*
+         * WooCommerce Subscriptions may pass the subscription object as the
+         * first argument on subscription-specific calculate hooks.
+         */
+        if ( null === $order && is_object( $and_taxes ) && method_exists( $and_taxes, 'get_items' ) ) {
+            $order = $and_taxes;
+        }
+
+        if ( ! $order ) {
             return;
         }
 
