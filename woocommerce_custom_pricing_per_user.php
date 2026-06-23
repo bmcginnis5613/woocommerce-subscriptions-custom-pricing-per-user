@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.3
+ * Version: 1.3.4
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -216,6 +216,9 @@ class WC_Custom_Renewal_Pricing {
         add_action( 'woocommerce_ajax_order_items_added', array( $this, 'apply_custom_price_to_admin_added_items' ), 20, 2 );
         add_action( 'woocommerce_order_before_calculate_totals', array( $this, 'apply_custom_price_before_admin_order_totals' ), 20, 2 );
         add_action( 'woocommerce_subscription_before_calculate_totals', array( $this, 'apply_custom_price_before_admin_order_totals' ), 20, 2 );
+
+        // Handle discounts for products with sign-up fees
+        add_action('woocommerce_cart_calculate_fees', array($this, 'apply_coupon_discount_to_subscription_sign_up_fees'), 30, 1);   
     }
 
     /**
@@ -1430,6 +1433,160 @@ class WC_Custom_Renewal_Pricing {
         }
 
         $this->apply_custom_prices_to_admin_order_object( $order, false );
+    }
+
+    public function apply_coupon_discount_to_subscription_sign_up_fees($cart) {
+        if (is_admin() && !defined('DOING_AJAX')) {
+            return;
+        }
+
+        if (!$cart || !is_user_logged_in()) {
+            return;
+        }
+
+        if (!class_exists('WC_Subscriptions_Product')) {
+            return;
+        }
+
+        $applied_coupons = $cart->get_applied_coupons();
+
+        if (empty($applied_coupons)) {
+            return;
+        }
+
+        $user_id = get_current_user_id();
+
+        $eligible_recurring_subtotal = 0;
+        $eligible_sign_up_fee_total  = 0;
+
+        foreach ($cart->get_cart() as $cart_item) {
+            if (empty($cart_item['data']) || !is_object($cart_item['data'])) {
+                continue;
+            }
+
+            $product      = $cart_item['data'];
+            $product_id   = isset($cart_item['product_id']) ? absint($cart_item['product_id']) : 0;
+            $variation_id = isset($cart_item['variation_id']) ? absint($cart_item['variation_id']) : 0;
+            $quantity     = isset($cart_item['quantity']) ? max(1, absint($cart_item['quantity'])) : 1;
+
+            $check_id = $variation_id ? $variation_id : $product_id;
+
+            if (
+                !isset($this->product_pricing_map[$check_id]) &&
+                !isset($this->product_pricing_map[$product_id])
+            ) {
+                continue;
+            }
+
+            $pricing_field = isset($this->product_pricing_map[$check_id])
+                ? $this->product_pricing_map[$check_id]
+                : $this->product_pricing_map[$product_id];
+
+            $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
+
+            if ($custom_price === '' || !is_numeric($custom_price) || $custom_price < 0) {
+                continue;
+            }
+
+            $custom_price = (float) $custom_price;
+
+            $sign_up_fee = (float) WC_Subscriptions_Product::get_sign_up_fee($product);
+
+            if ($sign_up_fee <= 0) {
+                continue;
+            }
+
+            $eligible_recurring_subtotal += $custom_price * $quantity;
+            $eligible_sign_up_fee_total  += $sign_up_fee * $quantity;
+        }
+
+        if ($eligible_sign_up_fee_total <= 0) {
+            return;
+        }
+
+        $sign_up_fee_discount = 0;
+
+        foreach ($applied_coupons as $coupon_code) {
+            $coupon = new WC_Coupon($coupon_code);
+
+            if (!$coupon || !$coupon->get_id()) {
+                continue;
+            }
+
+            $discount_type = $coupon->get_discount_type();
+            $amount        = (float) $coupon->get_amount();
+
+            if ($amount <= 0) {
+                continue;
+            }
+
+            /*
+            * Avoid double-discounting true WooCommerce Subscriptions sign-up fee coupons.
+            * Those coupon types already handle sign-up fees natively.
+            */
+            if (strpos($discount_type, 'sign_up_fee') !== false) {
+                continue;
+            }
+
+            /*
+            * Percent coupons:
+            * 90% off means 90% off the sign-up fee too.
+            * 100% off means the full sign-up fee is removed.
+            */
+            if (in_array($discount_type, array('percent', 'recurring_percent'), true)) {
+                $sign_up_fee_discount += $eligible_sign_up_fee_total * min(100, $amount) / 100;
+                continue;
+            }
+
+            /*
+            * Fixed coupons:
+            * $100 off should apply to the whole initial checkout total.
+            *
+            * WooCommerce is already applying as much of the fixed coupon as it can
+            * against the recurring/custom price. This calculates the remaining
+            * coupon value and applies that remainder to the sign-up fee.
+            */
+            if (in_array($discount_type, array('fixed_cart', 'fixed_product', 'recurring_fee'), true)) {
+                $coupon_value = $amount;
+
+                if ($discount_type === 'fixed_product') {
+                    /*
+                    * For your membership checkout, quantity is normally 1.
+                    * This keeps fixed_product coupons sensible if quantity changes.
+                    */
+                    $coupon_value = $amount;
+                }
+
+                $already_absorbed_by_recurring_price = min(
+                    $eligible_recurring_subtotal,
+                    $coupon_value
+                );
+
+                $remaining_coupon_value = max(
+                    0,
+                    $coupon_value - $already_absorbed_by_recurring_price
+                );
+
+                $sign_up_fee_discount += min(
+                    $eligible_sign_up_fee_total,
+                    $remaining_coupon_value
+                );
+            }
+        }
+
+        $sign_up_fee_discount = round($sign_up_fee_discount, wc_get_price_decimals());
+
+        if ($sign_up_fee_discount <= 0) {
+            return;
+        }
+
+        $sign_up_fee_discount = min($eligible_sign_up_fee_total, $sign_up_fee_discount);
+
+        $cart->add_fee(
+            __('Coupon discount applied to sign-up fee', 'wc-custom-renewal-pricing'),
+            -$sign_up_fee_discount,
+            false
+        );
     }
 }
 
