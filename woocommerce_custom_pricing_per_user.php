@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.3
+ * Version: 1.3.4
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -91,13 +91,13 @@ class WC_Custom_Renewal_Pricing {
         } elseif ($field === 'quarterly_membership_dues') {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
-                return floor(($annual / 4) / 10) * 10;
+                return floor(($annual / 4) / 5) * 5;
             }
             return '';
         } elseif ($field === 'bi_annual_membership_dues') {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
-                return floor(($annual * 1.85) / 10) * 10;
+                return floor(($annual * 1.85) / 5) * 5;
             }
             return '';
         } elseif ($field === 'quarterly_undiscounted_membership_dues') {
@@ -106,7 +106,7 @@ class WC_Custom_Renewal_Pricing {
             $annual_discounted = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual_discounted && is_numeric($annual_discounted) && $annual_discounted > 0) {
                 $annual_undiscounted = $annual_discounted / 0.894;
-                return floor(($annual_undiscounted / 4) / 10) * 10;
+                return floor(($annual_undiscounted / 4) / 5) * 5;
             }
             return '';
         }
@@ -233,8 +233,8 @@ class WC_Custom_Renewal_Pricing {
         if ($custom_price && is_numeric($custom_price) && $custom_price > 0) {
             $quarterly_price = $has_ceort_membership
                 ? $this->get_user_price_for_field($user->ID, 'quarterly_undiscounted_membership_dues')
-                : floor(($custom_price / 4) / 10) * 10;
-            $bi_annual_price = floor(($custom_price * 1.85) / 10) * 10;
+                : floor(($custom_price / 4) / 5) * 5;
+            $bi_annual_price = floor(($custom_price * 1.85) / 5) * 5;
         }
         ?>
         <style>
@@ -274,11 +274,11 @@ class WC_Custom_Renewal_Pricing {
                 if (annualValue && !isNaN(annualValue) && annualValue > 0) {
                     // CEORT annual dues are discounted; reverse the discount for quarterly dues.
                     var quarterlyBase = hasCeortMembership ? annualValue / 0.894 : annualValue;
-                    var quarterly = Math.floor((quarterlyBase / 4) / 10) * 10;
+                    var quarterly = Math.floor((quarterlyBase / 4) / 5) * 5;
                     $('#quarterly_membership_dues').val(formatNumber(quarterly));
                     
-                    // Biennial: annual * 1.85, rounded down to nearest 10
-                    var biAnnual = Math.floor((annualValue * 1.85) / 10) * 10;
+                    // Biennial: annual * 1.85, rounded down to nearest 5
+                    var biAnnual = Math.floor((annualValue * 1.85) / 5) * 5;
                     $('#bi_annual_membership_dues').val(formatNumber(biAnnual));
                 } else {
                     $('#quarterly_membership_dues').val('');
@@ -334,11 +334,11 @@ class WC_Custom_Renewal_Pricing {
                 updateDerivedFields();
             });
             
-            // Round down to nearest 10 on blur
+            // Round down to nearest 5 on blur
             annualInput.on('blur', function() {
                 var value = parseNumber($(this).val());
                 if (value) {
-                    value = Math.floor(value / 10) * 10;
+                    value = Math.floor(value / 5) * 5;
                     $(this).val(formatNumber(value));
                     updateDerivedFields();
                 }
@@ -421,7 +421,7 @@ class WC_Custom_Renewal_Pricing {
             // Ensure it's a whole number
             $custom_price = intval($custom_price);
             // Round down to nearest 10
-            $custom_price = floor($custom_price / 10) * 10;
+            $custom_price = floor($custom_price / 5) * 5;
             
             update_user_meta($user_id, 'annual_membership_dues', $custom_price);
                         
@@ -1281,7 +1281,7 @@ class WC_Custom_Renewal_Pricing {
         if ($column_name == 'bi_annual_membership_dues') {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
-                $bi_annual = floor(($annual * 1.85) / 10) * 10;
+                $bi_annual = floor(($annual * 1.85) / 5) * 5;
                 return wc_price($bi_annual);
             }
             return '—';
@@ -1290,7 +1290,7 @@ class WC_Custom_Renewal_Pricing {
         if ($column_name == 'quarterly_membership_dues') {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
-                $quarterly = floor(($annual / 4) / 10) * 10;
+                $quarterly = floor(($annual / 4) / 5) * 5;
                 return wc_price($quarterly);
             }
             return '—';
