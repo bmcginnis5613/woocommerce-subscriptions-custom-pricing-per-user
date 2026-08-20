@@ -183,9 +183,10 @@ class WC_Custom_Renewal_Pricing {
         // Update subscription recurring total when renewal is created
         add_action('woocommerce_subscription_renewal_order_created', array($this, 'update_subscription_recurring_total'), 5, 2);
         
-        // Set the initial renewal date to the last day of the month.
-        // WooCommerce Subscriptions advances future renewal dates, including early renewals.
+        // Keep renewal dates on the last day of the month at 9 AM Eastern.
+        // Normalize WooCommerce's calculated date without advancing the billing interval again.
         add_action('woocommerce_checkout_subscription_created', array($this, 'set_renewal_to_last_day_of_month'), 10, 1);
+        add_action('woocommerce_subscription_date_updated', array($this, 'normalize_next_payment_to_last_day'), 20, 3);
 
         // Admin display
         add_action('woocommerce_subscription_details_after_subscription_table', array($this, 'display_custom_renewal_price_info'), 10, 1);
@@ -1170,6 +1171,45 @@ class WC_Custom_Renewal_Pricing {
             'next_payment' => $next_payment_date,
         ));
         
+        $subscription->save();
+    }
+
+    /**
+     * Normalize a calculated next payment date to the last day of its existing month.
+     *
+     * WooCommerce Subscriptions is responsible for advancing the billing interval,
+     * including its special early-renewal calculation. This method deliberately
+     * preserves WooCommerce's calculated year and month and changes only the day
+     * and time, preventing an early renewal from being advanced twice.
+     */
+    public function normalize_next_payment_to_last_day($subscription, $date_type, $datetime) {
+        if ('next_payment' !== $date_type || !$subscription || empty($datetime)) {
+            return;
+        }
+
+        $timezone = new DateTimeZone('America/New_York');
+        $next_payment = new DateTime($datetime, new DateTimeZone('GMT'));
+        $next_payment->setTimezone($timezone);
+
+        $target_year = $next_payment->format('Y');
+        $target_month = $next_payment->format('m');
+        $last_day = $next_payment->format('t');
+
+        $normalized_date = new DateTime(
+            "$target_year-$target_month-$last_day 09:00:00",
+            $timezone
+        );
+        $normalized_date->setTimezone(new DateTimeZone('GMT'));
+        $normalized_datetime = $normalized_date->format('Y-m-d H:i:s');
+
+        // update_dates() triggers this action again, so stop when already normalized.
+        if ($normalized_datetime === $subscription->get_date('next_payment')) {
+            return;
+        }
+
+        $subscription->update_dates(array(
+            'next_payment' => $normalized_datetime,
+        ));
         $subscription->save();
     }
 
