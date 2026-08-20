@@ -728,31 +728,7 @@ class WC_Custom_Renewal_Pricing {
         }
         
         $user_id = $subscription->get_user_id();
-        $updated = false;
-        
-        // Update subscription line items with current custom pricing
-        foreach ($subscription->get_items() as $item_id => $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            
-            // Check both product ID and variation ID
-            $check_id = $variation_id ? $variation_id : $product_id;
-            
-            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                    ? $this->product_pricing_map[$check_id] 
-                    : $this->product_pricing_map[$product_id];
-                
-                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
-                
-                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                    $item->set_subtotal($custom_price);
-                    $item->set_total($custom_price);
-                    $item->save();
-                    $updated = true;
-                }
-            }
-        }
+        $updated = $this->update_order_items_price($subscription, $user_id);
         
         if ($updated) {
             $subscription->calculate_totals();
@@ -766,38 +742,7 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_renewal_order($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
-        
-        $updated = false;
-        
-        foreach ($renewal_order->get_items() as $item_id => $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            
-            // Check both product ID and variation ID
-            $check_id = $variation_id ? $variation_id : $product_id;
-            
-            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                    ? $this->product_pricing_map[$check_id] 
-                    : $this->product_pricing_map[$product_id];
-                
-                // Get the current custom price from user meta
-                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
-                
-                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                    // Set all price components explicitly
-                    $item->set_subtotal($custom_price);
-                    $item->set_total($custom_price);
-                    
-                    // Also update the line item meta to ensure consistency
-                    $item->update_meta_data('_line_subtotal', $custom_price);
-                    $item->update_meta_data('_line_total', $custom_price);
-                    
-                    $item->save();
-                    $updated = true;
-                }
-            }
-        }
+        $updated = $this->update_order_items_price($renewal_order, $user_id);
         
         if ($updated) {
             // Recalculate order totals to ensure everything is in sync
@@ -944,28 +889,7 @@ class WC_Custom_Renewal_Pricing {
      */
     public function update_subscription_recurring_total($renewal_order, $subscription) {
         $user_id = $subscription->get_user_id();
-        $updated = false;
-        
-        foreach ($subscription->get_items() as $item_id => $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            $check_id = $variation_id ? $variation_id : $product_id;
-            
-            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                    ? $this->product_pricing_map[$check_id] 
-                    : $this->product_pricing_map[$product_id];
-                
-                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
-                
-                if ($custom_price !== '' && is_numeric($custom_price) && $custom_price >= 0) {
-                    $item->set_subtotal($custom_price);
-                    $item->set_total($custom_price);
-                    $item->save();
-                    $updated = true;
-                }
-            }
-        }
+        $updated = $this->update_order_items_price($subscription, $user_id);
         
         if ($updated) {
             $subscription->calculate_totals();
@@ -1092,31 +1016,76 @@ class WC_Custom_Renewal_Pricing {
      */
     public function apply_custom_price_to_new_subscription($subscription, $order, $recurring_cart) {
         $user_id = $subscription->get_user_id();
-        
-        foreach ($subscription->get_items() as $item_id => $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            
-            // Check both product ID and variation ID
-            $check_id = $variation_id ? $variation_id : $product_id;
-            
-            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                    ? $this->product_pricing_map[$check_id] 
-                    : $this->product_pricing_map[$product_id];
-                
-                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
-                
-                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                    $item->set_subtotal($custom_price);
-                    $item->set_total($custom_price);
-                    $item->save();
-                }
-            }
-        }
+
+        /*
+         * A limited recurring coupon set to "Active for 1 payment" is consumed
+         * by the initial order when that order received a discount. Keep the
+         * coupon on the paid order, but remove it from the subscription so the
+         * email and future renewal total show the normal recurring amount.
+         */
+        $this->remove_consumed_single_payment_coupons($subscription, $order);
+
+        /*
+         * Apply the custom price and recalculate coupon discounts against that
+         * price. Merely calling calculate_totals() does not rebuild a coupon
+         * item's discount after this plugin changes the subscription line total.
+         */
+        $this->update_order_items_price($subscription, $user_id);
         
         $subscription->calculate_totals();
         $subscription->save();
+    }
+
+    /**
+     * Remove one-payment recurring coupons from a new subscription when their
+     * single use was consumed by the initial order.
+     */
+    private function remove_consumed_single_payment_coupons($subscription, $order) {
+        if (
+            !class_exists('WCS_Limited_Recurring_Coupon_Manager') ||
+            !method_exists('WCS_Limited_Recurring_Coupon_Manager', 'get_coupon_limit') ||
+            !$subscription ||
+            !$order
+        ) {
+            return;
+        }
+
+        $consumed_coupon_codes = array();
+
+        foreach ($order->get_items('coupon') as $coupon_item) {
+            if (
+                !method_exists($coupon_item, 'get_code') ||
+                !method_exists($coupon_item, 'get_discount') ||
+                (float) $coupon_item->get_discount() <= 0
+            ) {
+                continue;
+            }
+
+            $coupon_code = $coupon_item->get_code();
+
+            if (
+                $coupon_code &&
+                1 === WCS_Limited_Recurring_Coupon_Manager::get_coupon_limit($coupon_code)
+            ) {
+                $consumed_coupon_codes[wc_strtolower($coupon_code)] = true;
+            }
+        }
+
+        if (empty($consumed_coupon_codes)) {
+            return;
+        }
+
+        foreach ($subscription->get_items('coupon') as $coupon_item) {
+            if (!method_exists($coupon_item, 'get_code')) {
+                continue;
+            }
+
+            $coupon_code = $coupon_item->get_code();
+
+            if ($coupon_code && isset($consumed_coupon_codes[wc_strtolower($coupon_code)])) {
+                $subscription->remove_coupon($coupon_code);
+            }
+        }
     }
 
     /**
