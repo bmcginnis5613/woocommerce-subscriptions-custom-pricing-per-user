@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.10
+ * Version: 1.3.11
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -90,7 +90,11 @@ class WC_Custom_Renewal_Pricing {
      */
     private function get_user_price_for_field($user_id, $field) {
         if ($field === 'annual_membership_dues') {
-            return get_user_meta($user_id, 'annual_membership_dues', true);
+            $annual = get_user_meta($user_id, 'annual_membership_dues', true);
+
+            return is_numeric($annual) && (float) $annual > 0
+                ? $annual
+                : '';
         } elseif ($field === 'quarterly_membership_dues') {
             $annual = get_user_meta($user_id, 'annual_membership_dues', true);
             if ($annual && is_numeric($annual) && $annual > 0) {
@@ -521,9 +525,24 @@ class WC_Custom_Renewal_Pricing {
                 : $this->product_pricing_map[$product_id];
 
             $new_price = $this->get_user_price_for_field($user_id, $pricing_field);
+            $product   = $item->get_product();
 
-            if ($new_price === '' || !is_numeric($new_price) || $new_price < 0) {
-                continue;
+            /*
+             * Zero, an empty value, and missing user meta all mean that no
+             * customer-specific price is set. Restore the product's raw catalog
+             * price so existing subscriptions also return to their default when
+             * an administrator clears Annual Membership Dues or sets it to 0.
+             */
+            if ($new_price === '' || !is_numeric($new_price) || $new_price <= 0) {
+                if (!$product || !method_exists($product, 'get_price')) {
+                    continue;
+                }
+
+                $new_price = $product->get_price('edit');
+
+                if ($new_price === '' || !is_numeric($new_price) || $new_price < 0) {
+                    continue;
+                }
             }
 
             $new_price = (float) $new_price;
@@ -537,7 +556,6 @@ class WC_Custom_Renewal_Pricing {
              * before the new subscription has necessarily been related to its
              * parent order.
              */
-            $product = $item->get_product();
             $is_subscription_product = $product &&
                 class_exists('WC_Subscriptions_Product') &&
                 WC_Subscriptions_Product::is_subscription($product);
