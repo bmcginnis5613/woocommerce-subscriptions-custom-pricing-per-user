@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.9
+ * Version: 1.3.10
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -174,7 +174,9 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_cart_item_price', array($this, 'display_custom_cart_price'), 10, 3);
         add_filter('woocommerce_cart_item_subtotal', array($this, 'display_custom_cart_price'), 10, 3);
         add_filter('woocommerce_get_price_html', array($this, 'custom_price_html'), 10, 2);
-        add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 3);
+        add_action('woocommerce_checkout_create_subscription', array($this, 'apply_custom_price_to_new_subscription'), 10, 4);
+        add_action('woocommerce_checkout_subscription_created', array($this, 'recalculate_parent_order_after_subscription_created'), 100, 3);
+        add_action('woocommerce_order_action_wcs_create_pending_parent', array($this, 'recalculate_generated_parent_order'), 20, 1);
         
         // Apply custom pricing to renewals
         add_action('woocommerce_scheduled_subscription_payment', array($this, 'apply_user_custom_renewal_price'), 1, 1);
@@ -201,9 +203,6 @@ class WC_Custom_Renewal_Pricing {
         // Force cart fragments refresh
         add_filter('woocommerce_add_to_cart_fragments', array($this, 'refresh_cart_fragments'));
         
-        // Hook into order creation to update prices
-        add_action('woocommerce_checkout_order_created', array($this, 'update_order_prices_on_creation'), 10, 1);
-
         // Update subscription if we change price after order is created
         add_filter('woocommerce_subscription_get_total', array($this, 'filter_subscription_total_display'), 10, 2);
         add_filter('woocommerce_order_item_get_subtotal', array($this, 'filter_subscription_item_display_price'), 10, 3);
@@ -452,11 +451,14 @@ class WC_Custom_Renewal_Pricing {
                 // 2. Update the Last Order ONLY if it is unpaid/pending
                 // This covers: 
                 // - Pending Renewals waiting for payment
-                // - Initial Parent Orders that failed and are being retried
+                // - Initial parent orders that failed and are being retried (sign-up fee retained)
                 // - It purposefully IGNORIES 'completed' or 'processing' orders to preserve history
                 $last_order = $subscription->get_last_order('all');
                 
-                if ($last_order && $last_order->has_status(array('pending', 'on-hold', 'failed'))) {
+                if (
+                    $last_order &&
+                    $last_order->has_status(array('pending', 'on-hold', 'failed'))
+                ) {
                     $order_updated = $this->update_order_items_price($last_order, $user_id);
                     
                     if ($order_updated) {
@@ -527,6 +529,35 @@ class WC_Custom_Renewal_Pricing {
             $new_price = (float) $new_price;
             $quantity  = max(1, (int) $item->get_quantity());
 
+            /*
+             * A WC_Subscription and its renewal-related orders store recurring
+             * amounts only. A normal WC_Order containing a subscription product
+             * is the initial order and must also include the product's one-time
+             * sign-up fee. This remains true during woocommerce_checkout_order_created,
+             * before the new subscription has necessarily been related to its
+             * parent order.
+             */
+            $product = $item->get_product();
+            $is_subscription_product = $product &&
+                class_exists('WC_Subscriptions_Product') &&
+                WC_Subscriptions_Product::is_subscription($product);
+            $is_subscription_object = is_a($order_object, 'WC_Subscription');
+            $is_recurring_order = !$is_subscription_object &&
+                function_exists('wcs_order_contains_subscription') &&
+                wcs_order_contains_subscription(
+                    $order_object,
+                    array('renewal', 'resubscribe', 'switch')
+                );
+
+            if ($is_subscription_product && !$is_subscription_object && !$is_recurring_order) {
+                $sign_up_fee = (float) WC_Subscriptions_Product::get_sign_up_fee($product);
+                $trial_length = (int) WC_Subscriptions_Product::get_trial_length($product);
+
+                $new_price = $trial_length > 0
+                    ? $sign_up_fee
+                    : $new_price + $sign_up_fee;
+            }
+
             $line_subtotal = $new_price * $quantity;
             $line_total    = $line_subtotal;
 
@@ -558,8 +589,6 @@ class WC_Custom_Renewal_Pricing {
                     if ($amount <= 0) {
                         continue;
                     }
-
-                    $product = $item->get_product();
 
                     /*
                      * Respect product/category restrictions when WooCommerce can validate them.
@@ -674,7 +703,7 @@ class WC_Custom_Renewal_Pricing {
     }
     
     /**
-     * Update order prices when order is created at checkout
+     * Apply the custom initial price to a checkout parent order.
      */
     public function update_order_prices_on_creation($order) {
         
@@ -689,34 +718,61 @@ class WC_Custom_Renewal_Pricing {
             return;
         }
         
-        $updated = false;
-        
-        foreach ($order->get_items() as $item_id => $item) {
-            $product_id = $item->get_product_id();
-            $variation_id = $item->get_variation_id();
-            
-            // Check both product ID and variation ID
-            $check_id = $variation_id ? $variation_id : $product_id;
-            
-            if (isset($this->product_pricing_map[$check_id]) || isset($this->product_pricing_map[$product_id])) {
-                $pricing_field = isset($this->product_pricing_map[$check_id]) 
-                    ? $this->product_pricing_map[$check_id] 
-                    : $this->product_pricing_map[$product_id];
-                
-                $custom_price = $this->get_user_price_for_field($user_id, $pricing_field);
-                
-                if ($custom_price && is_numeric($custom_price) && $custom_price >= 0) {
-                    $item->set_subtotal($custom_price);
-                    $item->set_total($custom_price);
-                    $item->save();
-                    $updated = true;
-                }
-            }
-        }
+        $updated = $this->update_order_items_price($order, $user_id);
         
         if ($updated) {
             $order->calculate_totals();
             $order->save();
+        }
+    }
+
+    /**
+     * Recalculate the parent order after WooCommerce Subscriptions has finished
+     * creating and saving the subscription. At this point the checkout order,
+     * subscription, and their relationship have all been persisted.
+     */
+    public function recalculate_parent_order_after_subscription_created($subscription, $order, $recurring_cart) {
+        if (!$order || !is_object($order) || !method_exists($order, 'get_user_id')) {
+            return;
+        }
+
+        $this->update_order_prices_on_creation($order);
+
+        if (function_exists('wc_delete_shop_order_transients')) {
+            wc_delete_shop_order_transients($order->get_id());
+        }
+    }
+
+    /**
+     * Recalculate a parent order generated from the admin subscription action.
+     *
+     * WooCommerce Subscriptions creates the order at priority 10 on this hook,
+     * assigns it as the subscription's parent, and saves the subscription. This
+     * callback runs afterward at priority 20, when the parent is available.
+     */
+    public function recalculate_generated_parent_order($subscription) {
+        if (!$subscription || !is_a($subscription, 'WC_Subscription')) {
+            return;
+        }
+
+        $parent_order_id = method_exists($subscription, 'get_parent_id')
+            ? absint($subscription->get_parent_id())
+            : 0;
+
+        if (!$parent_order_id) {
+            return;
+        }
+
+        $parent_order = wc_get_order($parent_order_id);
+
+        if (!$parent_order) {
+            return;
+        }
+
+        $this->update_order_prices_on_creation($parent_order);
+
+        if (function_exists('wc_delete_shop_order_transients')) {
+            wc_delete_shop_order_transients($parent_order_id);
         }
     }
     
@@ -1017,7 +1073,7 @@ class WC_Custom_Renewal_Pricing {
     /**
      * Apply custom price when subscription is created at checkout
      */
-    public function apply_custom_price_to_new_subscription($subscription, $order, $recurring_cart) {
+    public function apply_custom_price_to_new_subscription($subscription, $posted_data, $order, $recurring_cart) {
         $user_id = $subscription->get_user_id();
 
         /*
