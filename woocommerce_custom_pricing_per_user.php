@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.11
+ * Version: 1.3.12
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -211,6 +211,10 @@ class WC_Custom_Renewal_Pricing {
         add_filter('woocommerce_subscription_get_total', array($this, 'filter_subscription_total_display'), 10, 2);
         add_filter('woocommerce_order_item_get_subtotal', array($this, 'filter_subscription_item_display_price'), 10, 3);
         add_filter('woocommerce_order_item_get_total', array($this, 'filter_subscription_item_display_price'), 10, 3);
+
+        // Display the initial parent-order price as recurring dues plus sign-up fee.
+        add_filter('woocommerce_get_order_item_totals', array($this, 'add_sign_up_fee_to_displayed_order_totals'), 20, 3);
+        add_action('woocommerce_admin_order_totals_after_discount', array($this, 'display_admin_sign_up_fee_breakdown'), 20, 1);
 
         // By default, WooCommerce Subscriptions will calculate the next payment date for a subscription from the time of the last payment. 
         // This snippet changes it to calculate the next payment date from the scheduled payment date, not the time the payment was actually processed.
@@ -567,9 +571,12 @@ class WC_Custom_Renewal_Pricing {
                     array('renewal', 'resubscribe', 'switch')
                 );
 
+            $applied_sign_up_fee = 0;
+
             if ($is_subscription_product && !$is_subscription_object && !$is_recurring_order) {
                 $sign_up_fee = (float) WC_Subscriptions_Product::get_sign_up_fee($product);
                 $trial_length = (int) WC_Subscriptions_Product::get_trial_length($product);
+                $applied_sign_up_fee = $sign_up_fee * $quantity;
 
                 $new_price = $trial_length > 0
                     ? $sign_up_fee
@@ -684,6 +691,10 @@ class WC_Custom_Renewal_Pricing {
              */
             $item->set_subtotal($line_subtotal);
             $item->set_total($line_total);
+
+            if ($applied_sign_up_fee > 0 && method_exists($item, 'update_meta_data')) {
+                $item->update_meta_data('_wc_crp_sign_up_fee', $applied_sign_up_fee);
+            }
 
             /*
              * Do not manually update _line_subtotal or _line_total meta.
@@ -950,6 +961,131 @@ class WC_Custom_Renewal_Pricing {
         }
 
         return (float) $custom_price * max(1, (int) $item->get_quantity());
+    }
+
+    /**
+     * Return the recurring-dues/sign-up-fee breakdown for an initial parent order.
+     */
+    private function get_parent_order_price_breakdown($order) {
+        if (
+            !$order ||
+            is_a($order, 'WC_Subscription') ||
+            !function_exists('wcs_order_contains_subscription') ||
+            !wcs_order_contains_subscription($order, 'parent')
+        ) {
+            return false;
+        }
+
+        $membership_dues = 0;
+        $sign_up_fee     = 0;
+
+        foreach ($order->get_items('line_item') as $item) {
+            if (!is_a($item, 'WC_Order_Item_Product')) {
+                continue;
+            }
+
+            $product_id   = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            $check_id     = $variation_id ? $variation_id : $product_id;
+
+            if (!isset($this->product_pricing_map[$check_id]) && !isset($this->product_pricing_map[$product_id])) {
+                continue;
+            }
+
+            $item_sign_up_fee = method_exists($item, 'get_meta')
+                ? (float) $item->get_meta('_wc_crp_sign_up_fee', true)
+                : 0;
+
+            if ($item_sign_up_fee <= 0) {
+                continue;
+            }
+
+            $item_subtotal    = (float) $item->get_subtotal();
+            $item_sign_up_fee = min($item_subtotal, $item_sign_up_fee);
+
+            $sign_up_fee     += $item_sign_up_fee;
+            $membership_dues += max(0, $item_subtotal - $item_sign_up_fee);
+        }
+
+        if ($sign_up_fee <= 0) {
+            return false;
+        }
+
+        return array(
+            'membership_dues' => $membership_dues,
+            'sign_up_fee'     => $sign_up_fee,
+        );
+    }
+
+    /**
+     * Add explanatory rows to My Account order details, emails, and compatible invoices.
+     */
+    public function add_sign_up_fee_to_displayed_order_totals($total_rows, $order, $tax_display) {
+        $breakdown = $this->get_parent_order_price_breakdown($order);
+
+        if (!$breakdown) {
+            return $total_rows;
+        }
+
+        $breakdown_rows = array(
+            'wc_crp_membership_dues' => array(
+                'label' => __('Membership dues:', 'wc-custom-renewal-pricing'),
+                'value' => wc_price($breakdown['membership_dues'], array('currency' => $order->get_currency())),
+            ),
+            'wc_crp_sign_up_fee' => array(
+                'label' => __('Sign-up fee:', 'wc-custom-renewal-pricing'),
+                'value' => wc_price($breakdown['sign_up_fee'], array('currency' => $order->get_currency())),
+            ),
+        );
+
+        $display_rows = array();
+
+        foreach ($total_rows as $key => $row) {
+            $display_rows[$key] = $row;
+
+            if ('cart_subtotal' === $key) {
+                $display_rows = array_merge($display_rows, $breakdown_rows);
+            }
+        }
+
+        // Defensive fallback for third-party templates that omit cart_subtotal.
+        if (!isset($display_rows['wc_crp_sign_up_fee'])) {
+            $display_rows = array();
+
+            foreach ($total_rows as $key => $row) {
+                if ('order_total' === $key) {
+                    $display_rows = array_merge($display_rows, $breakdown_rows);
+                }
+
+                $display_rows[$key] = $row;
+            }
+        }
+
+        return $display_rows;
+    }
+
+    /**
+     * Show the same display-only breakdown in the WP Admin order totals panel.
+     */
+    public function display_admin_sign_up_fee_breakdown($order_id) {
+        $order = wc_get_order($order_id);
+        $breakdown = $this->get_parent_order_price_breakdown($order);
+
+        if (!$breakdown) {
+            return;
+        }
+        ?>
+        <tr>
+            <td class="label"><?php esc_html_e('Membership dues:', 'wc-custom-renewal-pricing'); ?></td>
+            <td width="1%"></td>
+            <td class="total"><?php echo wp_kses_post(wc_price($breakdown['membership_dues'], array('currency' => $order->get_currency()))); ?></td>
+        </tr>
+        <tr>
+            <td class="label"><?php esc_html_e('Sign-up fee:', 'wc-custom-renewal-pricing'); ?></td>
+            <td width="1%"></td>
+            <td class="total"><?php echo wp_kses_post(wc_price($breakdown['sign_up_fee'], array('currency' => $order->get_currency()))); ?></td>
+        </tr>
+        <?php
     }
 
     /**
