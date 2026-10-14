@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WooCommerce Subscriptions - Custom Pricing Per User
  * Description: Allows administrators to set custom renewal prices for individual users' WooCommerce Subscriptions.
- * Version: 1.3.12
+ * Version: 1.3.14
  * Author: FirstTracks Marketing
  * Author URI: https://firsttracksmarketing.com
  * Requires Plugins: woocommerce, woocommerce-subscriptions
@@ -583,8 +583,10 @@ class WC_Custom_Renewal_Pricing {
                     : $new_price + $sign_up_fee;
             }
 
-            $line_subtotal = $new_price * $quantity;
-            $line_total    = $line_subtotal;
+            $line_subtotal            = $new_price * $quantity;
+            $line_total               = $line_subtotal;
+            $remaining_sign_up_fee    = min($line_subtotal, $applied_sign_up_fee);
+            $remaining_recurring_dues = max(0, $line_subtotal - $remaining_sign_up_fee);
 
             /*
              * Apply coupon discounts manually against the custom price.
@@ -616,59 +618,78 @@ class WC_Custom_Renewal_Pricing {
                     }
 
                     /*
-                     * Respect product/category restrictions when WooCommerce can validate them.
+                     * Match WC_Discounts validation. A fixed-cart coupon is not
+                     * a product coupon, so is_valid_for_product() deliberately
+                     * returns false for it; it remains valid via
+                     * is_valid_for_cart(). Requiring product validity alone was
+                     * resetting valid fixed-cart discounts to zero.
                      */
-                    if (
-                        $product &&
-                        method_exists($coupon, 'is_valid_for_product') &&
-                        !$coupon->is_valid_for_product(
+                    if ($product && method_exists($coupon, 'is_valid_for_product')) {
+                        $valid_for_product = $coupon->is_valid_for_product(
                             $product,
                             array(
                                 'product_id'   => $product_id,
                                 'variation_id' => $variation_id,
                                 'quantity'     => $quantity,
                             )
-                        )
-                    ) {
-                        continue;
+                        );
+                        $valid_for_cart = method_exists($coupon, 'is_valid_for_cart')
+                            ? $coupon->is_valid_for_cart()
+                            : false;
+
+                        if (!$valid_for_product && !$valid_for_cart) {
+                            continue;
+                        }
                     }
 
                     $line_discount = 0;
+                    $discount_base = 0;
+                    $component     = '';
 
                     /*
-                     * Standard percentage coupon.
+                     * Subscription coupons target different parts of the price:
+                     * sign-up coupons affect only the one-time fee, recurring
+                     * coupons affect only recurring dues, and standard coupons
+                     * affect the sign-up fee when one exists (otherwise the
+                     * initial recurring charge). Keeping these bases separate is
+                     * essential because the order stores both amounts in one line.
                      */
-                    if ($discount_type === 'percent') {
-                        $line_discount = $line_subtotal * ($amount / 100);
+                    if (in_array($discount_type, array('sign_up_fee', 'sign_up_fee_percent'), true)) {
+                        $discount_base = $remaining_sign_up_fee;
+                        $component     = 'sign_up_fee';
+                    } elseif (in_array($discount_type, array('recurring_fee', 'recurring_percent'), true)) {
+                        $discount_base = $remaining_recurring_dues;
+                        $component     = 'recurring';
+                    } elseif (in_array($discount_type, array('percent', 'fixed_product', 'fixed_cart'), true)) {
+                        /* Standard coupons apply only to an initial payment. */
+                        if (!$is_subscription_object && !$is_recurring_order) {
+                            if ($remaining_sign_up_fee > 0) {
+                                $discount_base = $remaining_sign_up_fee;
+                                $component     = 'sign_up_fee';
+                            } else {
+                                $discount_base = $remaining_recurring_dues;
+                                $component     = 'recurring';
+                            }
+                        }
                     }
 
-                    /*
-                     * WooCommerce Subscriptions recurring percentage coupon.
-                     */
-                    if ($discount_type === 'recurring_percent') {
-                        $line_discount = $line_subtotal * ($amount / 100);
+                    if ($discount_base <= 0) {
+                        continue;
                     }
 
-                    /*
-                     * Fixed product coupon.
-                     */
-                    if ($discount_type === 'fixed_product') {
-                        $line_discount = min($line_total, $amount * $quantity);
-                    }
-
-                    /*
-                     * WooCommerce Subscriptions recurring product/fee coupon.
-                     */
-                    if ($discount_type === 'recurring_fee') {
-                        $line_discount = min($line_total, $amount);
-                    }
-
-                    /*
-                     * Fixed cart coupon.
-                     * For single-line manual membership orders/subscriptions this works cleanly.
-                     */
-                    if ($discount_type === 'fixed_cart') {
-                        $line_discount = min($line_total, $amount);
+                    if (in_array($discount_type, array('percent', 'recurring_percent', 'sign_up_fee_percent'), true)) {
+                        $line_discount = $discount_base * ($amount / 100);
+                    } elseif (in_array($discount_type, array('fixed_product', 'sign_up_fee'), true)) {
+                        $line_discount = min($discount_base, $amount * $quantity);
+                    } elseif ($discount_type === 'fixed_cart') {
+                        /* A cart coupon has one shared budget across all lines. */
+                        $remaining_coupon_amount = max(
+                            0,
+                            $amount - (isset($coupon_discounts[$coupon_item_id]) ? $coupon_discounts[$coupon_item_id] : 0)
+                        );
+                        $line_discount = min($discount_base, $remaining_coupon_amount);
+                    } elseif ($discount_type === 'recurring_fee') {
+                        $line_discount = min($discount_base, $amount);
                     }
 
                     $line_discount = round($line_discount, wc_get_price_decimals());
@@ -677,8 +698,15 @@ class WC_Custom_Renewal_Pricing {
                         continue;
                     }
 
-                    $line_discount = min($line_total, $line_discount);
-                    $line_total    = max(0, $line_total - $line_discount);
+                    $line_discount = min($discount_base, $line_total, $line_discount);
+
+                    if ($component === 'sign_up_fee') {
+                        $remaining_sign_up_fee = max(0, $remaining_sign_up_fee - $line_discount);
+                    } elseif ($component === 'recurring') {
+                        $remaining_recurring_dues = max(0, $remaining_recurring_dues - $line_discount);
+                    }
+
+                    $line_total = max(0, $remaining_sign_up_fee + $remaining_recurring_dues);
 
                     if (isset($coupon_discounts[$coupon_item_id])) {
                         $coupon_discounts[$coupon_item_id] += $line_discount;
